@@ -172,8 +172,10 @@ static esp_err_t spi_setup(const ddc232_pins_t *p, spi_device_handle_t *out)
 
 static esp_err_t gpio_setup(const ddc232_pins_t *p)
 {
-    // Outputs: CONV, FORMAT
-    uint64_t out_mask = (1ULL << p->conv) | (1ULL << p->format);
+    // Outputs: CONV, FORMAT, CLR
+    uint64_t out_mask = (1ULL << p->conv) |
+                        (1ULL << p->format) |
+                        (1ULL << p->clr);
     gpio_config_t out_cfg = {
         .pin_bit_mask = out_mask,
         .mode         = GPIO_MODE_OUTPUT,
@@ -185,6 +187,7 @@ static esp_err_t gpio_setup(const ddc232_pins_t *p)
 
     gpio_set_level(p->conv, 0);
     gpio_set_level(p->format, 1);  // FORMAT=1: serial config register mode
+    gpio_set_level(p->clr, 0);    // hold in reset initially
 
     // Input: DVALID (active-low, use internal pull-up)
     gpio_config_t in_cfg = {
@@ -225,13 +228,35 @@ esp_err_t ddc232_init(const ddc232_config_t *cfg, ddc232_handle_t *out_handle)
     err = gpio_setup(&dev->pins);
     if (err != ESP_OK) { free(dev); return err; }
 
+    /*
+     * DDC232 power-on / reset sequence:
+     *  1. Assert CLR low (already done in gpio_setup)
+     *  2. Start MCLK — the DDC232 needs a running clock before it will
+     *     accept config register writes or respond to CONV
+     *  3. Wait for MCLK to stabilise (a few microseconds)
+     *  4. Release CLR high — DDC232 exits reset, internal state is cleared
+     *  5. Wait for the device to initialise (~1 ms)
+     *  6. Write the serial config register
+     *  7. Run a dummy CONV cycle to flush stale integrator state
+     */
+
+    /* 1-2. CLR is already low; start MCLK */
     err = mclk_start(dev->pins.mclk, dev->mclk_freq_hz);
     if (err != ESP_OK) { free(dev); return err; }
+
+    /* 3. Let MCLK settle */
+    ets_delay_us(10);
+
+    /* 4. Release reset */
+    gpio_set_level(dev->pins.clr, 1);
+
+    /* 5. Wait for DDC232 to initialise */
+    ets_delay_us(1000);
 
     err = spi_setup(&dev->pins, &dev->spi);
     if (err != ESP_OK) { mclk_stop(); free(dev); return err; }
 
-    /* Write initial configuration to the DDC232 */
+    /* 6. Write initial configuration */
     err = write_config_register(dev);
     if (err != ESP_OK) {
         spi_bus_remove_device(dev->spi);
@@ -239,6 +264,31 @@ esp_err_t ddc232_init(const ddc232_config_t *cfg, ddc232_handle_t *out_handle)
         mclk_stop();
         free(dev);
         return err;
+    }
+
+    /* 7. Dummy conversion to flush integrators */
+    ESP_LOGI(TAG, "Running dummy conversion to flush integrators...");
+    gpio_set_level(dev->pins.conv, 1);
+    ets_delay_us(1);
+    gpio_set_level(dev->pins.conv, 0);
+
+    /* Wait for dummy conversion to complete (DVALID low), then discard data */
+    int timeout = 200000;
+    while (gpio_get_level(dev->pins.dvalid) != 0 && --timeout > 0) {
+        ets_delay_us(1);
+    }
+    if (timeout <= 0) {
+        ESP_LOGW(TAG, "Timeout on dummy conversion (DVALID never asserted) — "
+                      "check wiring and MCLK");
+    } else {
+        /* Clock out and discard the stale data */
+        uint8_t discard[80] = {0};
+        spi_transaction_t txn = {
+            .length    = 640,
+            .rxlength  = 640,
+            .rx_buffer = discard,
+        };
+        spi_device_transmit(dev->spi, &txn);
     }
 
     ESP_LOGI(TAG, "Initialised: MCLK=%lu Hz, integration=%lu us (NINT=%lu), range=%d",
@@ -356,6 +406,7 @@ esp_err_t ddc232_set_test_mode(ddc232_handle_t h, bool enable)
 esp_err_t ddc232_deinit(ddc232_handle_t h)
 {
     if (!h) return ESP_ERR_INVALID_ARG;
+    gpio_set_level(h->pins.clr, 0);  // hold DDC232 in reset
     mclk_stop();
     spi_bus_remove_device(h->spi);
     spi_bus_free(SPI_HOST_USED);

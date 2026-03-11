@@ -21,6 +21,7 @@ static const char *TAG = "main";
 #define PIN_DOUT       GPIO_NUM_13
 #define PIN_DIN        GPIO_NUM_11
 #define PIN_FORMAT     GPIO_NUM_15
+#define PIN_CLR        GPIO_NUM_16
 
 /* ---- Default operating parameters ---- */
 #define DEFAULT_MCLK_HZ        5000000   // 5 MHz
@@ -225,6 +226,7 @@ void app_main(void)
             .dout   = PIN_DOUT,
             .din    = PIN_DIN,
             .format = PIN_FORMAT,
+            .clr    = PIN_CLR,
         },
         .mclk_freq_hz   = DEFAULT_MCLK_HZ,
         .integration_us  = DEFAULT_INTEGRATION_US,

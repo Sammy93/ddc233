@@ -34,6 +34,7 @@ typedef enum {
  *   DOUT   - Serial data from DDC232 (SPI MISO)
  *   DIN    - Serial data to DDC232 (SPI MOSI) for config register
  *   FORMAT - Tied high to enable serial config register mode
+ *   CLR    - Active-low reset output
  */
 typedef struct {
     gpio_num_t mclk;       // LEDC output -> DDC MCLK
@@ -43,6 +44,7 @@ typedef struct {
     gpio_num_t dout;       // SPI MISO     <- DDC DOUT
     gpio_num_t din;        // SPI MOSI     -> DDC DIN (config register write)
     gpio_num_t format;     // GPIO output  -> DDC FORMAT (high = serial config)
+    gpio_num_t clr;        // GPIO output  -> DDC CLR (active-low reset)
 } ddc232_pins_t;
 
 typedef struct {
