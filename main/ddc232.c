@@ -36,6 +36,7 @@ struct ddc232_dev {
     uint32_t        integration_us;
     ddc232_range_t  range;
     uint32_t        nint;           // current NINT value in config register
+    bool            test_mode;      // true = internal test pattern enabled
     spi_device_handle_t spi;
 };
 
@@ -101,6 +102,7 @@ static esp_err_t write_config_register(struct ddc232_dev *dev)
 {
     uint8_t tx_buf[5] = {0};  // 40 bits = 5 bytes
 
+    uint8_t test    = dev->test_mode ? 1 : 0;
     uint8_t range_a = dev->range & 0x07;
     uint8_t range_b = dev->range & 0x07;  // same range for both sides
     uint32_t nint   = dev->nint;
@@ -109,14 +111,14 @@ static esp_err_t write_config_register(struct ddc232_dev *dev)
      * Pack the 40-bit register into tx_buf[0..4], MSB first:
      *
      *   Byte 0, bit 7 = register bit 39 (reserved, 0)
-     *   Byte 0, bit 6 = register bit 38 (test mode, 0)
+     *   Byte 0, bit 6 = register bit 38 (test mode)
      *   Byte 0, bit 5 = register bit 37 (reserved, 0)
      *   Byte 0, bits 4-2 = register bits 36-34 (range A)
      *   Byte 0, bits 1-0 + Byte 1 bit 7 = register bits 33-31 (range B)
      *   Byte 1 bits 6-0 + Byte 2-3 + Byte 4 bits 7-3 = register bits 30-11 (NINT)
      *   Byte 4 bits 2-0 + remaining = register bits 10-0 (reserved, 0)
      */
-    tx_buf[0]  = (range_a << 2) | (range_b >> 1);
+    tx_buf[0]  = (test << 6) | (range_a << 2) | (range_b >> 1);
     tx_buf[1]  = (range_b << 7) | ((nint >> 14) & 0x7F);
     tx_buf[2]  = (nint >> 6) & 0xFF;
     tx_buf[3]  = (nint << 2) & 0xFC;
@@ -341,6 +343,14 @@ esp_err_t ddc232_read(ddc232_handle_t h, int32_t data[DDC232_NUM_CHANNELS])
     }
 
     return ESP_OK;
+}
+
+esp_err_t ddc232_set_test_mode(ddc232_handle_t h, bool enable)
+{
+    if (!h) return ESP_ERR_INVALID_ARG;
+    h->test_mode = enable;
+    ESP_LOGI(TAG, "Test mode %s", enable ? "ON" : "OFF");
+    return write_config_register(h);
 }
 
 esp_err_t ddc232_deinit(ddc232_handle_t h)

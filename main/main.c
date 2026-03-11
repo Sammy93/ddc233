@@ -91,6 +91,22 @@ static int cmd_mclk(int argc, char **argv)
     return 0;
 }
 
+static int cmd_test(int argc, char **argv)
+{
+    if (argc < 2) {
+        printf("Usage: test <on|off>\n"
+               "  Enables/disables DDC232 internal test mode.\n"
+               "  When on, internal reference currents drive all channels\n"
+               "  producing a known pattern (no external input needed).\n");
+        return 1;
+    }
+    bool enable = (strcmp(argv[1], "on") == 0 || strcmp(argv[1], "1") == 0);
+    esp_err_t err = ddc232_set_test_mode(adc, enable);
+    if (err != ESP_OK) { printf("Error: %s\n", esp_err_to_name(err)); return 1; }
+    printf("Test mode %s\n", enable ? "ON" : "OFF");
+    return 0;
+}
+
 static int cmd_continuous(int argc, char **argv)
 {
     int count = 10;
@@ -140,6 +156,11 @@ static void register_commands(void)
             .command = "mclk",
             .help    = "Set MCLK frequency: mclk <hz>",
             .func    = cmd_mclk,
+        },
+        {
+            .command = "test",
+            .help    = "Toggle test mode: test <on|off>",
+            .func    = cmd_test,
         },
         {
             .command = "continuous",
@@ -224,6 +245,7 @@ void app_main(void)
            "  range <0-7>       - Set full-scale charge range\n"
            "  inttime <us>      - Set integration time (microseconds)\n"
            "  mclk <hz>         - Set master clock frequency\n"
+           "  test <on|off>       - Enable/disable internal test mode\n"
            "  continuous [n] [ms] - Read n samples with delay\n"
            "  help              - Show all commands\n\n");
 

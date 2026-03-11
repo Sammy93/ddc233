@@ -94,6 +94,14 @@ esp_err_t ddc232_set_mclk(ddc232_handle_t h, uint32_t freq_hz);
 esp_err_t ddc232_read(ddc232_handle_t h, int32_t data[DDC232_NUM_CHANNELS]);
 
 /**
+ * Enable or disable test mode via the serial config register.
+ * In test mode the DDC232 connects internal reference currents to the
+ * integrators, producing a known output pattern on all channels.
+ * Useful for verifying digital readout without analog inputs.
+ */
+esp_err_t ddc232_set_test_mode(ddc232_handle_t h, bool enable);
+
+/**
  * Stop MCLK and release resources.
  */
 esp_err_t ddc232_deinit(ddc232_handle_t h);
