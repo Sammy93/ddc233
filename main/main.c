@@ -14,17 +14,17 @@
 static const char *TAG = "main";
 
 /* ---- Default pin assignment (adjust to your PCB) ---- */
-#define PIN_MCLK      GPIO_NUM_5
+#define PIN_CLK        GPIO_NUM_5
 #define PIN_CONV       GPIO_NUM_6
 #define PIN_DVALID     GPIO_NUM_7
 #define PIN_DCLK       GPIO_NUM_12
 #define PIN_DOUT       GPIO_NUM_13
-#define PIN_DIN        GPIO_NUM_11
-#define PIN_FORMAT     GPIO_NUM_15
-#define PIN_CLR        GPIO_NUM_16
+#define PIN_DIN_CFG    GPIO_NUM_11
+#define PIN_CLK_CFG    GPIO_NUM_15
+#define PIN_RESET      GPIO_NUM_16
 
 /* ---- Default operating parameters ---- */
-#define DEFAULT_MCLK_HZ        5000000   // 5 MHz
+#define DEFAULT_CLK_HZ         10000000  // 10 MHz system clock
 #define DEFAULT_INTEGRATION_US 1000      // 1 ms
 #define DEFAULT_RANGE          DDC232_RANGE_50PC
 
@@ -78,17 +78,17 @@ static int cmd_inttime(int argc, char **argv)
     return 0;
 }
 
-static int cmd_mclk(int argc, char **argv)
+static int cmd_clk(int argc, char **argv)
 {
     if (argc < 2) {
-        printf("Usage: mclk <frequency_hz>\n");
+        printf("Usage: clk <frequency_hz>\n");
         return 1;
     }
     uint32_t hz = (uint32_t)atoi(argv[1]);
     if (hz == 0) { printf("Invalid frequency\n"); return 1; }
-    esp_err_t err = ddc232_set_mclk(adc, hz);
+    esp_err_t err = ddc232_set_clk(adc, hz);
     if (err != ESP_OK) { printf("Error: %s\n", esp_err_to_name(err)); return 1; }
-    printf("MCLK set to %lu Hz\n", hz);
+    printf("CLK set to %lu Hz\n", hz);
     return 0;
 }
 
@@ -97,8 +97,8 @@ static int cmd_test(int argc, char **argv)
     if (argc < 2) {
         printf("Usage: test <on|off>\n"
                "  Enables/disables DDC232 internal test mode.\n"
-               "  When on, internal reference currents drive all channels\n"
-               "  producing a known pattern (no external input needed).\n");
+               "  When on, inputs are disconnected and the DDC232 measures\n"
+               "  a zero-input signal (no external connections needed).\n");
         return 1;
     }
     bool enable = (strcmp(argv[1], "on") == 0 || strcmp(argv[1], "1") == 0);
@@ -154,9 +154,9 @@ static void register_commands(void)
             .func    = cmd_inttime,
         },
         {
-            .command = "mclk",
-            .help    = "Set MCLK frequency: mclk <hz>",
-            .func    = cmd_mclk,
+            .command = "clk",
+            .help    = "Set system clock frequency: clk <hz>",
+            .func    = cmd_clk,
         },
         {
             .command = "test",
@@ -219,18 +219,18 @@ void app_main(void)
     /* --- DDC232 initialisation --- */
     ddc232_config_t cfg = {
         .pins = {
-            .mclk   = PIN_MCLK,
-            .conv   = PIN_CONV,
-            .dvalid = PIN_DVALID,
-            .dclk   = PIN_DCLK,
-            .dout   = PIN_DOUT,
-            .din    = PIN_DIN,
-            .format = PIN_FORMAT,
-            .clr    = PIN_CLR,
+            .clk     = PIN_CLK,
+            .conv    = PIN_CONV,
+            .dvalid  = PIN_DVALID,
+            .dclk    = PIN_DCLK,
+            .dout    = PIN_DOUT,
+            .din_cfg = PIN_DIN_CFG,
+            .clk_cfg = PIN_CLK_CFG,
+            .reset   = PIN_RESET,
         },
-        .mclk_freq_hz   = DEFAULT_MCLK_HZ,
-        .integration_us  = DEFAULT_INTEGRATION_US,
-        .range           = DEFAULT_RANGE,
+        .clk_freq_hz    = DEFAULT_CLK_HZ,
+        .integration_us = DEFAULT_INTEGRATION_US,
+        .range          = DEFAULT_RANGE,
     };
 
     esp_err_t err = ddc232_init(&cfg, &adc);
@@ -246,8 +246,8 @@ void app_main(void)
            "  read              - Single readout of all 32 channels\n"
            "  range <0-7>       - Set full-scale charge range\n"
            "  inttime <us>      - Set integration time (microseconds)\n"
-           "  mclk <hz>         - Set master clock frequency\n"
-           "  test <on|off>       - Enable/disable internal test mode\n"
+           "  clk <hz>          - Set system clock frequency\n"
+           "  test <on|off>     - Enable/disable internal test mode\n"
            "  continuous [n] [ms] - Read n samples with delay\n"
            "  help              - Show all commands\n\n");
 
