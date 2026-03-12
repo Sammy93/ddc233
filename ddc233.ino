@@ -23,6 +23,13 @@
 #define PIN_CLK_CFG    5    // GPIO out -> DDC CLK_CFG (config clock)
 #define PIN_RESET      15   // GPIO out -> DDC RESET (active-low)
 
+/* ---- DAC8562 Pin assignment (2x DAC on SPI2/FSPI) ---- */
+#define PIN_DAC_SCK    1    // SPI CLK  -> DAC SCLK
+#define PIN_DAC_MOSI   2    // SPI MOSI -> DAC DIN
+#define PIN_DAC_CS1    45   // SPI CS   -> DAC1 SYNC (active-low)
+#define PIN_DAC_CS2    3    // SPI CS   -> DAC2 SYNC (active-low)
+#define PIN_DAC_CLR    21   // GPIO out -> DAC CLR (active-low)
+
 /* ---- Operating parameters ---- */
 #define DEFAULT_CLK_HZ          10000000  // 10 MHz system clock
 #define DEFAULT_INTEGRATION_US  1000      // 1 ms
@@ -32,6 +39,12 @@
 #define DATA_BITS     20
 #define CFG_REG_BITS  12
 #define SPI_CLK_HZ    20000000  // 20 MHz DCLK for data readout (DDC232 max)
+
+/* ---- DAC8562 parameters ---- */
+#define DAC_SPI_CLK_HZ   20000000  // 20 MHz SPI clock (DAC8562 max 50 MHz)
+#define DAC_SAMPLE_RATE   50000    // 50 kHz DDS sample rate
+#define DAC_LUT_SIZE      256      // sine lookup table entries
+#define DAC_PHASE_BITS    32       // DDS phase accumulator width
 
 /* ---- Range labels ---- */
 static const char* range_labels[] = {
@@ -46,8 +59,23 @@ static uint8_t  current_range  = DEFAULT_RANGE;
 static bool     test_mode      = false;
 static bool     clk_4x         = false;
 
-/* SPI instance on HSPI (SPI2) */
+/* SPI instance on HSPI (SPI3 on ESP32-S3) for DDC232 readout */
 static SPIClass hspi(HSPI);
+
+/* SPI instance on FSPI (SPI2 on ESP32-S3) for DAC8562 output */
+static SPIClass dac_spi(FSPI);
+
+/* ---- DAC8562 DDS state ---- */
+static uint16_t dac_sine_lut[DAC_LUT_SIZE];
+static volatile uint32_t dac1_phase_inc = 0;
+static volatile uint32_t dac2_phase_inc = 0;
+static uint32_t dac1_phase_acc = 0;
+static uint32_t dac2_phase_acc = 0;
+static volatile bool dac_running = false;
+static TaskHandle_t dac_task_handle = NULL;
+static hw_timer_t *dac_timer = NULL;
+static uint32_t dac1_freq_hz = 1000;
+static uint32_t dac2_freq_hz = 2000;
 
 /* Forward declarations */
 static void ddc232_flush();
@@ -611,6 +639,267 @@ static void ddc232_flush()
 }
 
 /* ================================================================
+ * DAC8562 dual sine wave generator (DDS, timer-driven)
+ * ================================================================
+ *
+ * Two DAC8562 on a shared SPI bus (FSPI/SPI2) with separate CS lines.
+ * A hardware timer fires at DAC_SAMPLE_RATE (100 kHz) and notifies a
+ * FreeRTOS task on core 0. The task advances two 32-bit DDS phase
+ * accumulators and writes the corresponding sine LUT values to each
+ * DAC via SPI. This runs entirely independently of the DDC232 readout
+ * on core 1.
+ *
+ * DAC8562 SPI: 24-bit frame = 8-bit command + 16-bit data, Mode 1
+ *   0x18 = Write DAC-A input register and update all
+ *   0x38 = Internal reference setup (data 0x0001 = enable)
+ */
+
+static uint32_t dac_freq_to_inc(uint32_t freq_hz)
+{
+    return (uint32_t)((uint64_t)freq_hz * (1ULL << DAC_PHASE_BITS) / DAC_SAMPLE_RATE);
+}
+
+static void IRAM_ATTR dac_timer_isr()
+{
+    BaseType_t wake = pdFALSE;
+    vTaskNotifyGiveFromISR(dac_task_handle, &wake);
+    if (wake) portYIELD_FROM_ISR();
+}
+
+static void dac_write_cmd(uint8_t cs_pin, uint8_t cmd, uint16_t data)
+{
+    digitalWrite(cs_pin, LOW);
+    dac_spi.transfer(cmd);
+    dac_spi.transfer16(data);
+    digitalWrite(cs_pin, HIGH);
+}
+
+/* Fast 24-bit DAC write using exactly 24 SPI clocks (8-bit cmd + 16-bit data).
+ * SPI transaction is held open by the caller to avoid per-sample mutex overhead. */
+static inline void dac_write_fast(uint8_t cs_pin, uint8_t cmd, uint16_t data)
+{
+    digitalWrite(cs_pin, LOW);
+    dac_spi.transfer(cmd);
+    dac_spi.transfer16(data);
+    digitalWrite(cs_pin, HIGH);
+}
+
+static void dac_output_task(void *param)
+{
+    /* Hold SPI config permanently — this task owns the bus */
+    dac_spi.beginTransaction(SPISettings(DAC_SPI_CLK_HZ, MSBFIRST, SPI_MODE1));
+
+    while (true) {
+        ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+        if (!dac_running) continue;
+
+        dac1_phase_acc += dac1_phase_inc;
+        dac2_phase_acc += dac2_phase_inc;
+
+        uint16_t val1 = dac_sine_lut[dac1_phase_acc >> (DAC_PHASE_BITS - 8)];
+        uint16_t val2 = dac_sine_lut[dac2_phase_acc >> (DAC_PHASE_BITS - 8)];
+
+        dac_write_fast(PIN_DAC_CS1, 0x18, val1);  // DAC1 ch A
+        dac_write_fast(PIN_DAC_CS1, 0x19, val1);  // DAC1 ch B
+        dac_write_fast(PIN_DAC_CS2, 0x18, val2);  // DAC2 ch A
+        dac_write_fast(PIN_DAC_CS2, 0x19, val2);  // DAC2 ch B
+    }
+}
+
+static void dac_init()
+{
+    /* GPIO, SPI, reference, and mid-scale already done at top of setup().
+     * Here we just build the LUT, create the task, and start output. */
+
+    /* Build sine LUT (full-scale 0–65535) */
+    for (int i = 0; i < DAC_LUT_SIZE; i++) {
+        dac_sine_lut[i] = (uint16_t)(32767.5 + 32767.5 * sin(2.0 * M_PI * i / DAC_LUT_SIZE));
+    }
+
+    /* Set default DDS frequencies */
+    dac1_phase_inc = dac_freq_to_inc(dac1_freq_hz);
+    dac2_phase_inc = dac_freq_to_inc(dac2_freq_hz);
+
+    /* Create DAC output task on core 0 (loop() runs on core 1) */
+    xTaskCreatePinnedToCore(dac_output_task, "dac_out", 2048, NULL, 5, &dac_task_handle, 0);
+
+    Serial.printf("DAC8562 x2 initialized (DAC1=%lu Hz, DAC2=%lu Hz)\n",
+                  dac1_freq_hz, dac2_freq_hz);
+
+}
+
+static void dac_start()
+{
+    if (dac_running) return;
+
+    dac1_phase_acc = 0;
+    dac2_phase_acc = 0;
+    dac_running = true;
+
+    dac_timer = timerBegin(1000000);  /* 1 MHz base counter */
+    timerAttachInterrupt(dac_timer, &dac_timer_isr);
+    timerAlarm(dac_timer, 20, true, 0);  /* alarm every 20 µs = 50 kHz */
+
+    Serial.printf("DAC started: DAC1=%lu Hz, DAC2=%lu Hz @ %d kHz sample rate\n",
+                  dac1_freq_hz, dac2_freq_hz, DAC_SAMPLE_RATE / 1000);
+}
+
+static void dac_stop()
+{
+    if (!dac_running) return;
+
+    /* Stop timer first so no more notifications arrive */
+    if (dac_timer) {
+        timerEnd(dac_timer);
+        dac_timer = NULL;
+    }
+    dac_running = false;
+    delay(1);  /* let task finish current iteration */
+
+    /* Task still holds the SPI transaction open — restore boot values */
+    dac_write_fast(PIN_DAC_CS1, 0x18, 0x0000);  // DAC1 ch A: zero
+    dac_write_fast(PIN_DAC_CS1, 0x19, 0x0000);  // DAC1 ch B: zero
+    dac_write_fast(PIN_DAC_CS2, 0x18, 0x4000);  // DAC2 ch A: mid-voltage
+    dac_write_fast(PIN_DAC_CS2, 0x19, 0x4000);  // DAC2 ch B: mid-voltage
+
+    Serial.println("DAC stopped (outputs at mid-scale)");
+}
+
+static void cmd_dac(const char* arg1, const char* arg2)
+{
+    if (!arg1 || *arg1 == '\0') {
+        Serial.println("Usage:");
+        Serial.println("  dac on              - Start sine wave output");
+        Serial.println("  dac off             - Stop output (mid-scale)");
+        Serial.println("  dac freq1 <hz>      - Set DAC1 frequency");
+        Serial.println("  dac freq2 <hz>      - Set DAC2 frequency");
+        Serial.println("  dac status          - Show current settings");
+        return;
+    }
+
+    if (strcmp(arg1, "on") == 0) {
+        dac_start();
+    } else if (strcmp(arg1, "off") == 0) {
+        dac_stop();
+    } else if (strcmp(arg1, "freq1") == 0) {
+        if (!arg2 || *arg2 == '\0') { Serial.println("Usage: dac freq1 <hz>"); return; }
+        dac1_freq_hz = (uint32_t)atol(arg2);
+        dac1_phase_inc = dac_freq_to_inc(dac1_freq_hz);
+        Serial.printf("DAC1 frequency set to %lu Hz\n", dac1_freq_hz);
+    } else if (strcmp(arg1, "freq2") == 0) {
+        if (!arg2 || *arg2 == '\0') { Serial.println("Usage: dac freq2 <hz>"); return; }
+        dac2_freq_hz = (uint32_t)atol(arg2);
+        dac2_phase_inc = dac_freq_to_inc(dac2_freq_hz);
+        Serial.printf("DAC2 frequency set to %lu Hz\n", dac2_freq_hz);
+    } else if (strcmp(arg1, "status") == 0) {
+        Serial.printf("DAC status: %s\n", dac_running ? "RUNNING" : "STOPPED");
+        Serial.printf("  DAC1 (CS=GPIO%d): %lu Hz\n", PIN_DAC_CS1, dac1_freq_hz);
+        Serial.printf("  DAC2 (CS=GPIO%d): %lu Hz\n", PIN_DAC_CS2, dac2_freq_hz);
+        Serial.printf("  Sample rate: %d kHz, LUT: %d entries\n",
+                      DAC_SAMPLE_RATE / 1000, DAC_LUT_SIZE);
+    } else {
+        Serial.printf("Unknown dac subcommand: '%s'\n", arg1);
+    }
+}
+
+/* ================================================================
+ * DAC voltage commands (DC output mode)
+ * ================================================================
+ *
+ * Transfer functions (hardware-specific):
+ *   DAC2 (bias):  V_opamp = 4 × V_dac - 5        (±5 V range)
+ *   DAC1 ch A:    V_out   = +7.8 × V_dac          (0 to +30 V)
+ *   DAC1 ch B:    V_out   = -7.8 × V_dac          (0 to -30 V)
+ *
+ * DAC voltage: V_dac = code × 5 / 65536  (gain=2, Vref=2.5 V)
+ */
+
+#define DAC_BIAS_GAIN     4.0f
+#define DAC_BIAS_OFFSET   5.0f     // V_opamp = GAIN × V_dac - OFFSET
+#define DAC_SW_GAIN       7.8f
+#define DAC_V_PER_CODE    (5.0f / 65536.0f)
+
+static uint16_t bias_v_to_code(float v_out)
+{
+    float v_dac = (v_out + DAC_BIAS_OFFSET) / DAC_BIAS_GAIN;
+    float code_f = v_dac / DAC_V_PER_CODE;
+    if (code_f < 0) code_f = 0;
+    if (code_f > 65535) code_f = 65535;
+    return (uint16_t)(code_f + 0.5f);
+}
+
+static uint16_t sw_v_to_code(float v_out)
+{
+    float v_dac = fabsf(v_out) / DAC_SW_GAIN;
+    float code_f = v_dac / DAC_V_PER_CODE;
+    if (code_f < 0) code_f = 0;
+    if (code_f > 65535) code_f = 65535;
+    return (uint16_t)(code_f + 0.5f);
+}
+
+static void dac_set_voltage(uint8_t cs_pin, uint8_t cmd, uint16_t code)
+{
+    /* Stop sine wave if running — DC and sine are mutually exclusive */
+    if (dac_running) dac_stop();
+
+    dac_spi.beginTransaction(SPISettings(DAC_SPI_CLK_HZ, MSBFIRST, SPI_MODE1));
+    dac_write_cmd(cs_pin, cmd, code);
+    dac_spi.endTransaction();
+}
+
+static void cmd_vbias1(const char* arg)
+{
+    if (!arg || *arg == '\0') {
+        Serial.println("Usage: vbias1 <voltage>  (-5.0 to +5.0 V)");
+        return;
+    }
+    float v = atof(arg);
+    if (v < -5.0f || v > 5.0f) { Serial.println("Out of range (-5 to +5)"); return; }
+    uint16_t code = bias_v_to_code(v);
+    dac_set_voltage(PIN_DAC_CS2, 0x18, code);
+    Serial.printf("VBias1 = %.3f V (code 0x%04X)\n", v, code);
+}
+
+static void cmd_vbias2(const char* arg)
+{
+    if (!arg || *arg == '\0') {
+        Serial.println("Usage: vbias2 <voltage>  (-5.0 to +5.0 V)");
+        return;
+    }
+    float v = atof(arg);
+    if (v < -5.0f || v > 5.0f) { Serial.println("Out of range (-5 to +5)"); return; }
+    uint16_t code = bias_v_to_code(v);
+    dac_set_voltage(PIN_DAC_CS2, 0x19, code);
+    Serial.printf("VBias2 = %.3f V (code 0x%04X)\n", v, code);
+}
+
+static void cmd_vsw1(const char* arg)
+{
+    if (!arg || *arg == '\0') {
+        Serial.println("Usage: vsw1 <voltage>  (0.0 to +30.0 V)");
+        return;
+    }
+    float v = atof(arg);
+    if (v < 0.0f || v > 30.0f) { Serial.println("Out of range (0 to 30)"); return; }
+    uint16_t code = sw_v_to_code(v);
+    dac_set_voltage(PIN_DAC_CS1, 0x18, code);
+    Serial.printf("VSW1 = %.3f V (code 0x%04X)\n", v, code);
+}
+
+static void cmd_vsw2(const char* arg)
+{
+    if (!arg || *arg == '\0') {
+        Serial.println("Usage: vsw2 <voltage>  (-30.0 to 0.0 V)");
+        return;
+    }
+    float v = atof(arg);
+    if (v < -30.0f || v > 0.0f) { Serial.println("Out of range (-30 to 0)"); return; }
+    uint16_t code = sw_v_to_code(v);
+    dac_set_voltage(PIN_DAC_CS1, 0x19, code);
+    Serial.printf("VSW2 = %.3f V (code 0x%04X)\n", v, code);
+}
+
+/* ================================================================
  * Serial command processing
  * ================================================================ */
 
@@ -938,6 +1227,13 @@ static void cmd_help()
     Serial.println("  continuous [n] [ms] - Read n samples (CSV text)");
     Serial.println("  stream [n]        - Binary stream (max speed)");
     Serial.println("  capture [n]       - Capture to PSRAM, then dump (measures true HW speed)");
+    Serial.println("  vbias1 <V>        - Set VBias1 (-5 to +5 V)");
+    Serial.println("  vbias2 <V>        - Set VBias2 (-5 to +5 V)");
+    Serial.println("  vsw1 <V>          - Set switch voltage 1 (0 to +30 V)");
+    Serial.println("  vsw2 <V>          - Set switch voltage 2 (-30 to 0 V)");
+    Serial.println("  dac on|off        - Start/stop DAC8562 sine wave output");
+    Serial.println("  dac freq1|freq2 <hz> - Set DAC1/DAC2 sine frequency");
+    Serial.println("  dac status        - Show DAC settings");
     Serial.println("  readcfg           - Write + read back config register");
     Serial.println("  scope             - Slow signal test for oscilloscope");
     Serial.println("  diag              - Run hardware diagnostics");
@@ -972,7 +1268,12 @@ static void process_command(const char* line)
     else if (strcmp(cmd, "continuous") == 0) cmd_continuous(arg1, arg2);
     else if (strcmp(cmd, "stream") == 0)     cmd_stream(arg1);
     else if (strcmp(cmd, "capture") == 0)    cmd_capture(arg1);
-    else if (strcmp(cmd, "diag") == 0)        cmd_diag();
+    else if (strcmp(cmd, "dac") == 0)        cmd_dac(arg1, arg2);
+    else if (strcmp(cmd, "vbias1") == 0)    cmd_vbias1(arg1);
+    else if (strcmp(cmd, "vbias2") == 0)    cmd_vbias2(arg1);
+    else if (strcmp(cmd, "vsw1") == 0)      cmd_vsw1(arg1);
+    else if (strcmp(cmd, "vsw2") == 0)      cmd_vsw2(arg1);
+    else if (strcmp(cmd, "diag") == 0)       cmd_diag();
     else if (strcmp(cmd, "readcfg") == 0)    write_and_readback_config();
     else if (strcmp(cmd, "scope") == 0)      cmd_scope();
     else if (strcmp(cmd, "help") == 0)       cmd_help();
@@ -985,6 +1286,26 @@ static void process_command(const char* line)
 
 void setup()
 {
+    /* ---- DAC2 mid-voltage FIRST — absolute priority at boot ---- */
+    pinMode(PIN_DAC_CS2, OUTPUT);
+    pinMode(PIN_DAC_CLR, OUTPUT);
+    digitalWrite(PIN_DAC_CS2, HIGH);
+    digitalWrite(PIN_DAC_CLR, HIGH);  // ensure CLR inactive
+    dac_spi.begin(PIN_DAC_SCK, -1, PIN_DAC_MOSI, -1);
+    dac_spi.beginTransaction(SPISettings(DAC_SPI_CLK_HZ, MSBFIRST, SPI_MODE1));
+    dac_write_cmd(PIN_DAC_CS2, 0x18, 0x4000);  // DAC2 ch A: load mid-voltage code
+    dac_write_cmd(PIN_DAC_CS2, 0x19, 0x4000);  // DAC2 ch B: load mid-voltage code
+    dac_write_cmd(PIN_DAC_CS2, 0x38, 0x0001);  // enable ref — output ramps smoothly to 1.25V
+
+    /* ---- Now DAC1 ---- */
+    pinMode(PIN_DAC_CS1, OUTPUT);
+    digitalWrite(PIN_DAC_CS1, HIGH);
+    dac_write_cmd(PIN_DAC_CS1, 0x18, 0x0000);  // DAC1 ch A: zero
+    dac_write_cmd(PIN_DAC_CS1, 0x19, 0x0000);  // DAC1 ch B: zero
+    dac_write_cmd(PIN_DAC_CS1, 0x38, 0x0001);  // enable ref
+    dac_spi.endTransaction();
+
+    /* ---- Now proceed with normal init ---- */
     Serial.begin(115200);
     while (!Serial) { delay(10); }  // wait for USB CDC
 
@@ -1006,8 +1327,11 @@ void setup()
     clk_start(PIN_CLK, clk_freq_hz);
     delay(10);  // let CLK settle before config operations
 
-    /* ---- Setup SPI for data readout ---- */
+    /* ---- Setup SPI for DDC232 data readout ---- */
     hspi.begin(PIN_DCLK, PIN_DOUT, -1, -1);  // SCLK, MISO, MOSI=-1, SS=-1
+
+    /* ---- Setup DAC8562 x2 sine wave generator ---- */
+    dac_init();
 
     /* ---- Write config register, read back to verify, strobe CONV for normal op ---- */
     write_and_readback_config();

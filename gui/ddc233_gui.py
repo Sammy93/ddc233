@@ -183,6 +183,7 @@ class DDC233Gui:
         # Build bottom panels FIRST (pack side=BOTTOM) so they're always visible,
         # then the plot fills the remaining space.
         self._build_config_status()
+        self._build_dac_controls()
         self._build_controls()
         self._build_channel_selector()
         self._build_toolbar()
@@ -314,6 +315,69 @@ class DDC233Gui:
         )
         ttk.Button(btn_frame, text="None", command=self._select_no_ch).pack(
             side=tk.LEFT, padx=2
+        )
+
+    def _build_dac_controls(self):
+        frame = ttk.LabelFrame(self.root, text="DAC Voltage Controls")
+        frame.pack(side=tk.BOTTOM, fill=tk.X, padx=5, pady=3)
+
+        inner = ttk.Frame(frame)
+        inner.pack(fill=tk.X, padx=3, pady=2)
+
+        # VBias1: -5 to +5 V
+        ttk.Label(inner, text="VBias1 (V):").grid(row=0, column=0, padx=2)
+        self.vbias1_var = tk.StringVar(value="0.0")
+        ttk.Entry(inner, textvariable=self.vbias1_var, width=8).grid(
+            row=0, column=1, padx=2
+        )
+        ttk.Label(inner, text="(-5 to +5)").grid(row=0, column=2, padx=(0, 5))
+        ttk.Button(inner, text="Set", command=self._set_vbias1).grid(
+            row=0, column=3, padx=5
+        )
+
+        ttk.Separator(inner, orient=tk.VERTICAL).grid(
+            row=0, column=4, sticky="ns", padx=5
+        )
+
+        # VBias2: -5 to +5 V
+        ttk.Label(inner, text="VBias2 (V):").grid(row=0, column=5, padx=2)
+        self.vbias2_var = tk.StringVar(value="0.0")
+        ttk.Entry(inner, textvariable=self.vbias2_var, width=8).grid(
+            row=0, column=6, padx=2
+        )
+        ttk.Label(inner, text="(-5 to +5)").grid(row=0, column=7, padx=(0, 5))
+        ttk.Button(inner, text="Set", command=self._set_vbias2).grid(
+            row=0, column=8, padx=5
+        )
+
+        ttk.Separator(inner, orient=tk.VERTICAL).grid(
+            row=0, column=9, sticky="ns", padx=5
+        )
+
+        # VSW1: 0 to +30 V
+        ttk.Label(inner, text="VSW1 (V):").grid(row=0, column=10, padx=2)
+        self.vsw1_var = tk.StringVar(value="0.0")
+        ttk.Entry(inner, textvariable=self.vsw1_var, width=8).grid(
+            row=0, column=11, padx=2
+        )
+        ttk.Label(inner, text="(0 to +30)").grid(row=0, column=12, padx=(0, 5))
+        ttk.Button(inner, text="Set", command=self._set_vsw1).grid(
+            row=0, column=13, padx=5
+        )
+
+        ttk.Separator(inner, orient=tk.VERTICAL).grid(
+            row=0, column=14, sticky="ns", padx=5
+        )
+
+        # VSW2: -30 to 0 V
+        ttk.Label(inner, text="VSW2 (V):").grid(row=0, column=15, padx=2)
+        self.vsw2_var = tk.StringVar(value="0.0")
+        ttk.Entry(inner, textvariable=self.vsw2_var, width=8).grid(
+            row=0, column=16, padx=2
+        )
+        ttk.Label(inner, text="(-30 to 0)").grid(row=0, column=17, padx=(0, 5))
+        ttk.Button(inner, text="Set", command=self._set_vsw2).grid(
+            row=0, column=18, padx=5
         )
 
     def _build_controls(self):
@@ -541,6 +605,50 @@ class DDC233Gui:
         state = "on" if self.test_var.get() else "off"
         self._send_and_read_response(f"test {state}", wait=0.8)
         self._update_config_status()
+
+    def _set_vbias1(self):
+        try:
+            v = float(self.vbias1_var.get())
+        except ValueError:
+            messagebox.showerror("Invalid input", "Enter a number for VBias1")
+            return
+        if v < -5.0 or v > 5.0:
+            messagebox.showerror("Out of range", "VBias1 must be -5 to +5 V")
+            return
+        self._send_and_read_response(f"vbias1 {v:.4f}")
+
+    def _set_vbias2(self):
+        try:
+            v = float(self.vbias2_var.get())
+        except ValueError:
+            messagebox.showerror("Invalid input", "Enter a number for VBias2")
+            return
+        if v < -5.0 or v > 5.0:
+            messagebox.showerror("Out of range", "VBias2 must be -5 to +5 V")
+            return
+        self._send_and_read_response(f"vbias2 {v:.4f}")
+
+    def _set_vsw1(self):
+        try:
+            v = float(self.vsw1_var.get())
+        except ValueError:
+            messagebox.showerror("Invalid input", "Enter a number for VSW1")
+            return
+        if v < 0.0 or v > 30.0:
+            messagebox.showerror("Out of range", "VSW1 must be 0 to +30 V")
+            return
+        self._send_and_read_response(f"vsw1 {v:.4f}")
+
+    def _set_vsw2(self):
+        try:
+            v = float(self.vsw2_var.get())
+        except ValueError:
+            messagebox.showerror("Invalid input", "Enter a number for VSW2")
+            return
+        if v < -30.0 or v > 0.0:
+            messagebox.showerror("Out of range", "VSW2 must be -30 to 0 V")
+            return
+        self._send_and_read_response(f"vsw2 {v:.4f}")
 
     def _toggle_channel(self, ch, var):
         if var.get():
