@@ -271,11 +271,46 @@ esp_err_t ddc232_init(const ddc232_config_t *cfg, ddc232_handle_t *out_handle)
     return ESP_OK;
 }
 
+/**
+ * Write config register then strobe CONV + flush to enter normal operation.
+ */
+static esp_err_t apply_config(struct ddc232_dev *dev)
+{
+    esp_err_t err = write_config_register(dev);
+    if (err != ESP_OK) return err;
+
+    /* Strobe CONV to begin normal operation after config write */
+    gpio_set_level(dev->pins.conv, 1);
+    ets_delay_us(10);
+    gpio_set_level(dev->pins.conv, 0);
+
+    /* Flush stale integrator data */
+    gpio_set_level(dev->pins.conv, 1);
+    ets_delay_us(dev->integration_us);
+    gpio_set_level(dev->pins.conv, 0);
+
+    int timeout = 200000;
+    while (gpio_get_level(dev->pins.dvalid) != 0 && --timeout > 0) {
+        ets_delay_us(1);
+    }
+    if (timeout > 0) {
+        uint8_t discard[80] = {0};
+        spi_transaction_t txn = {
+            .length    = 640,
+            .rxlength  = 640,
+            .rx_buffer = discard,
+        };
+        spi_device_transmit(dev->spi, &txn);
+    }
+
+    return ESP_OK;
+}
+
 esp_err_t ddc232_set_range(ddc232_handle_t h, ddc232_range_t range)
 {
     if (!h || range > DDC232_RANGE_350PC) return ESP_ERR_INVALID_ARG;
     h->range = range;
-    return write_config_register(h);
+    return apply_config(h);
 }
 
 esp_err_t ddc232_set_integration_time(ddc232_handle_t h, uint32_t us)
@@ -302,7 +337,7 @@ esp_err_t ddc232_set_test_mode(ddc232_handle_t h, bool enable)
     if (!h) return ESP_ERR_INVALID_ARG;
     h->test_mode = enable;
     ESP_LOGI(TAG, "Test mode %s", enable ? "ON" : "OFF");
-    return write_config_register(h);
+    return apply_config(h);
 }
 
 esp_err_t ddc232_read(ddc232_handle_t h, int32_t data[DDC232_NUM_CHANNELS])

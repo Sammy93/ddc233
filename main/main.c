@@ -14,14 +14,15 @@
 static const char *TAG = "main";
 
 /* ---- Default pin assignment (adjust to your PCB) ---- */
-#define PIN_CLK        GPIO_NUM_5
-#define PIN_CONV       GPIO_NUM_6
+#define PIN_CLK        GPIO_NUM_14
+#define PIN_CONV       GPIO_NUM_8
 #define PIN_DVALID     GPIO_NUM_7
 #define PIN_DCLK       GPIO_NUM_12
-#define PIN_DOUT       GPIO_NUM_13
-#define PIN_DIN_CFG    GPIO_NUM_11
-#define PIN_CLK_CFG    GPIO_NUM_15
-#define PIN_RESET      GPIO_NUM_16
+#define PIN_DOUT       GPIO_NUM_9
+#define PIN_DIN        GPIO_NUM_11
+#define PIN_DIN_CFG    GPIO_NUM_6
+#define PIN_CLK_CFG    GPIO_NUM_5
+#define PIN_RESET      GPIO_NUM_15
 
 /* ---- Default operating parameters ---- */
 #define DEFAULT_CLK_HZ         10000000  // 10 MHz system clock
