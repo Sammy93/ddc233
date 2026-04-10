@@ -1,0 +1,554 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>DDC233 GUI - Annotated Guide</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { background: #1a1a1a; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; color: #eee; }
+.container { position: relative; display: inline-block; margin: 20px; }
+.container img { display: block; width: 1390px; }
+
+/* Clickable hotspot overlays */
+.spot {
+  position: absolute;
+  border: 2px solid;
+  border-radius: 3px;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.spot:hover { background: rgba(255,255,255,0.08); }
+
+/* Numbered badge on each hotspot */
+.spot .badge {
+  position: absolute;
+  font-size: 10px;
+  font-weight: 700;
+  padding: 0 4px;
+  border-radius: 2px;
+  white-space: nowrap;
+  line-height: 16px;
+  pointer-events: none;
+}
+
+/* Floating note (click to open, X to close) */
+.note {
+  display: none;
+  position: fixed;
+  z-index: 1000;
+  background: #1e1e2e;
+  color: #e0e0e0;
+  border: 1px solid #555;
+  border-radius: 8px;
+  padding: 16px 20px 16px 20px;
+  font-size: 14px;
+  line-height: 1.6;
+  max-width: 420px;
+  min-width: 280px;
+  box-shadow: 0 8px 32px rgba(0,0,0,0.6);
+}
+.note.open { display: block; }
+.note .note-title {
+  font-size: 15px;
+  font-weight: 700;
+  margin-bottom: 8px;
+  padding-right: 24px;
+}
+.note .note-close {
+  position: absolute;
+  top: 10px;
+  right: 12px;
+  background: none;
+  border: none;
+  color: #999;
+  font-size: 20px;
+  cursor: pointer;
+  line-height: 1;
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+.note .note-close:hover { color: #fff; background: rgba(255,255,255,0.1); }
+.note .usage-tag {
+  display: inline-block;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 1px 7px;
+  border-radius: 3px;
+  margin-bottom: 8px;
+}
+.usage-primary   { background: #2ecc71; color: #000; }
+.usage-debugging { background: #7f8c8d; color: #fff; }
+.usage-both      { background: #3498db; color: #fff; }
+.note table { margin: 8px 0; border-collapse: collapse; }
+.note td { padding: 2px 10px; font-size: 13px; }
+
+/* Backdrop to close note when clicking outside */
+.backdrop {
+  display: none;
+  position: fixed;
+  top: 0; left: 0; right: 0; bottom: 0;
+  z-index: 999;
+}
+.backdrop.open { display: block; }
+
+/* Color groups */
+.c-conn   { border-color: #3498db; } .c-conn   .badge { background: #3498db; color: #fff; }
+.c-stream { border-color: #2ecc71; } .c-stream .badge { background: #2ecc71; color: #000; }
+.c-disp   { border-color: #e67e22; } .c-disp   .badge { background: #e67e22; color: #fff; }
+.c-filt   { border-color: #9b59b6; } .c-filt   .badge { background: #9b59b6; color: #fff; }
+.c-cal    { border-color: #e74c3c; } .c-cal    .badge { background: #e74c3c; color: #fff; }
+.c-plot   { border-color: #1abc9c; } .c-plot   .badge { background: #1abc9c; color: #000; }
+.c-ddc    { border-color: #f1c40f; } .c-ddc    .badge { background: #f1c40f; color: #000; }
+.c-dac    { border-color: #e91e63; } .c-dac    .badge { background: #e91e63; color: #fff; }
+.c-hv     { border-color: #00bcd4; } .c-hv     .badge { background: #00bcd4; color: #000; }
+.c-cfg    { border-color: #78909c; } .c-cfg    .badge { background: #78909c; color: #fff; }
+.c-log    { border-color: #8bc34a; } .c-log    .badge { background: #8bc34a; color: #000; }
+
+h1 { text-align: center; margin: 20px 0 0; font-size: 22px; font-weight: 500; }
+p.subtitle { text-align: center; margin: 4px 0 0; font-size: 14px; color: #999; }
+.legend { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; margin: 8px 20px 5px; font-size: 12px; }
+.legend span { padding: 2px 10px; border-radius: 3px; }
+.usage-legend { display: flex; justify-content: center; gap: 14px; margin: 4px 0 12px; font-size: 12px; color: #aaa; }
+.usage-legend span { padding: 1px 8px; border-radius: 3px; font-weight: 600; font-size: 11px; }
+</style>
+</head>
+<body>
+
+<h1>DDC232/233 Readout GUI</h1>
+<p class="subtitle">Click any numbered label for a detailed explanation</p>
+<div class="legend">
+  <span style="background:#3498db;color:#fff">Connection</span>
+  <span style="background:#2ecc71;color:#000">Streaming</span>
+  <span style="background:#e67e22;color:#fff">Display</span>
+  <span style="background:#9b59b6;color:#fff">Filters</span>
+  <span style="background:#e74c3c;color:#fff">Calibration</span>
+  <span style="background:#1abc9c;color:#000">Plots</span>
+  <span style="background:#f1c40f;color:#000">DDC232</span>
+  <span style="background:#e91e63;color:#fff">DAC</span>
+  <span style="background:#00bcd4;color:#000">HV Switches</span>
+  <span style="background:#8bc34a;color:#000">Logging</span>
+  <span style="background:#78909c;color:#fff">Config</span>
+</div>
+<div class="usage-legend">
+  Usage: <span class="usage-primary">Primary</span> <span class="usage-debugging">Debugging only</span> <span class="usage-both">Both</span>
+</div>
+
+<!-- Backdrop for closing notes -->
+<div class="backdrop" id="backdrop" onclick="closeNote()"></div>
+
+<!-- Single floating note element, reused for all spots -->
+<div class="note" id="floatingNote">
+  <button class="note-close" onclick="closeNote()">&times;</button>
+  <div id="noteContent"></div>
+</div>
+
+<div class="container">
+  <img src="screenshot.png" alt="DDC233 GUI Screenshot">
+
+  <!-- 1. Port -->
+  <div class="spot c-conn" style="left:4px; top:3px; width:196px; height:25px;" onclick="showNote(this, event)" data-note="note-port">
+    <span class="badge" style="top:-14px; left:0">1</span>
+  </div>
+  <!-- 2. Refresh -->
+  <div class="spot c-conn" style="left:204px; top:3px; width:65px; height:25px;" onclick="showNote(this, event)" data-note="note-refresh">
+    <span class="badge" style="top:-14px; left:0">2</span>
+  </div>
+  <!-- 3. Connect -->
+  <div class="spot c-conn" style="left:275px; top:3px; width:80px; height:25px;" onclick="showNote(this, event)" data-note="note-connect">
+    <span class="badge" style="top:-14px; left:0">3</span>
+  </div>
+  <!-- 4. Mode -->
+  <div class="spot c-disp" style="left:373px; top:3px; width:140px; height:25px;" onclick="showNote(this, event)" data-note="note-mode">
+    <span class="badge" style="top:-14px; left:0">4</span>
+  </div>
+  <!-- 5. Status -->
+  <div class="spot c-conn" style="left:1290px; top:3px; width:96px; height:25px;" onclick="showNote(this, event)" data-note="note-status">
+    <span class="badge" style="top:-14px; right:0">5</span>
+  </div>
+  <!-- 6. Delay -->
+  <div class="spot c-stream" style="left:4px; top:29px; width:128px; height:24px;" onclick="showNote(this, event)" data-note="note-delay">
+    <span class="badge" style="top:-14px; left:0">6</span>
+  </div>
+  <!-- 7. Start -->
+  <div class="spot c-stream" style="left:135px; top:29px; width:55px; height:24px;" onclick="showNote(this, event)" data-note="note-start">
+    <span class="badge" style="top:-14px; left:0">7</span>
+  </div>
+  <!-- 8. Single Read -->
+  <div class="spot c-stream" style="left:196px; top:29px; width:80px; height:24px;" onclick="showNote(this, event)" data-note="note-single">
+    <span class="badge" style="top:-14px; left:0">8</span>
+  </div>
+  <!-- 9. Matrix Scan -->
+  <div class="spot c-stream" style="left:282px; top:29px; width:90px; height:24px;" onclick="showNote(this, event)" data-note="note-mscan">
+    <span class="badge" style="top:-14px; left:0">9</span>
+  </div>
+  <!-- 10. Debug Scan -->
+  <div class="spot c-stream" style="left:378px; top:29px; width:85px; height:24px;" onclick="showNote(this, event)" data-note="note-dscan">
+    <span class="badge" style="top:-14px; left:0">10</span>
+  </div>
+  <!-- 11. Avg/col -->
+  <div class="spot c-stream" style="left:470px; top:29px; width:105px; height:24px;" onclick="showNote(this, event)" data-note="note-avg">
+    <span class="badge" style="top:-14px; left:0">11</span>
+  </div>
+  <!-- 12. Units -->
+  <div class="spot c-disp" style="left:585px; top:29px; width:90px; height:24px;" onclick="showNote(this, event)" data-note="note-units">
+    <span class="badge" style="top:-14px; left:0">12</span>
+  </div>
+  <!-- 13. SMA -->
+  <div class="spot c-filt" style="left:686px; top:29px; width:80px; height:24px;" onclick="showNote(this, event)" data-note="note-sma">
+    <span class="badge" style="top:-14px; left:0">13</span>
+  </div>
+  <!-- 14. Notch -->
+  <div class="spot c-filt" style="left:776px; top:29px; width:95px; height:24px;" onclick="showNote(this, event)" data-note="note-notch">
+    <span class="badge" style="top:-14px; left:0">14</span>
+  </div>
+  <!-- 15. Scale -->
+  <div class="spot c-disp" style="left:878px; top:29px; width:170px; height:24px;" onclick="showNote(this, event)" data-note="note-scale">
+    <span class="badge" style="top:-14px; left:0">15</span>
+  </div>
+  <!-- 16. Calibrate -->
+  <div class="spot c-cal" style="left:1075px; top:29px; width:105px; height:24px;" onclick="showNote(this, event)" data-note="note-cal">
+    <span class="badge" style="top:-14px; left:0">16</span>
+  </div>
+  <!-- 17. Clear Cal -->
+  <div class="spot c-cal" style="left:1185px; top:29px; width:75px; height:24px;" onclick="showNote(this, event)" data-note="note-calclear">
+    <span class="badge" style="top:-14px; left:0">17</span>
+  </div>
+  <!-- 18. Log -->
+  <div class="spot c-log" style="left:1270px; top:29px; width:80px; height:24px;" onclick="showNote(this, event)" data-note="note-log">
+    <span class="badge" style="top:-14px; left:0">18</span>
+  </div>
+  <!-- 19. Heatmap -->
+  <div class="spot c-plot" style="left:12px; top:58px; width:1220px; height:144px;" onclick="showNote(this, event)" data-note="note-heatmap">
+    <span class="badge" style="top:2px; right:2px">19</span>
+  </div>
+  <!-- 20. Time Series -->
+  <div class="spot c-plot" style="left:12px; top:210px; width:1365px; height:158px;" onclick="showNote(this, event)" data-note="note-timeseries">
+    <span class="badge" style="top:2px; right:2px">20</span>
+  </div>
+  <!-- 21. Channel Selector -->
+  <div class="spot c-plot" style="left:5px; top:372px; width:530px; height:84px;" onclick="showNote(this, event)" data-note="note-chsel">
+    <span class="badge" style="top:2px; right:2px">21</span>
+  </div>
+  <!-- 22. Range -->
+  <div class="spot c-ddc" style="left:5px; top:460px; width:220px; height:45px;" onclick="showNote(this, event)" data-note="note-range">
+    <span class="badge" style="top:-14px; left:0">22</span>
+  </div>
+  <!-- 23. Int. Time -->
+  <div class="spot c-ddc" style="left:228px; top:460px; width:230px; height:45px;" onclick="showNote(this, event)" data-note="note-inttime">
+    <span class="badge" style="top:-14px; left:0">23</span>
+  </div>
+  <!-- 24. CLK -->
+  <div class="spot c-ddc" style="left:462px; top:460px; width:225px; height:45px;" onclick="showNote(this, event)" data-note="note-clk">
+    <span class="badge" style="top:-14px; left:0">24</span>
+  </div>
+  <!-- 25. Test Mode -->
+  <div class="spot c-ddc" style="left:690px; top:460px; width:90px; height:45px;" onclick="showNote(this, event)" data-note="note-test">
+    <span class="badge" style="top:-14px; left:0">25</span>
+  </div>
+  <!-- 26. Verify Config -->
+  <div class="spot c-ddc" style="left:784px; top:460px; width:100px; height:45px;" onclick="showNote(this, event)" data-note="note-verify">
+    <span class="badge" style="top:-14px; left:0">26</span>
+  </div>
+  <!-- 27. DAC Voltages -->
+  <div class="spot c-dac" style="left:5px; top:510px; width:1106px; height:45px;" onclick="showNote(this, event)" data-note="note-dac">
+    <span class="badge" style="top:2px; right:2px">27</span>
+  </div>
+  <!-- 28. HV Chip 2 -->
+  <div class="spot c-hv" style="left:5px; top:558px; width:440px; height:114px;" onclick="showNote(this, event)" data-note="note-hv2">
+    <span class="badge" style="top:2px; right:2px">28</span>
+  </div>
+  <!-- 29. HV Chip 1 -->
+  <div class="spot c-hv" style="left:5px; top:680px; width:440px; height:132px;" onclick="showNote(this, event)" data-note="note-hv1">
+    <span class="badge" style="top:2px; right:2px">29</span>
+  </div>
+  <!-- 30. Config Status -->
+  <div class="spot c-cfg" style="left:5px; top:820px; width:1380px; height:35px;" onclick="showNote(this, event)" data-note="note-cfgstatus">
+    <span class="badge" style="top:2px; right:2px">30</span>
+  </div>
+
+</div>
+
+<!-- Note content templates (hidden) -->
+<div style="display:none">
+
+<div id="note-port">
+  <div class="note-title">1. Serial Port</div>
+  <span class="usage-tag usage-primary">Primary</span>
+  <p>Select the ESP32-S3 USB serial port from the dropdown. On macOS this is typically <code>/dev/cu.usbmodem*</code>, on Windows <code>COM3</code> etc.</p>
+</div>
+
+<div id="note-refresh">
+  <div class="note-title">2. Refresh</div>
+  <span class="usage-tag usage-primary">Primary</span>
+  <p>Rescan for available serial ports. Use after plugging in or power-cycling the ESP32.</p>
+</div>
+
+<div id="note-connect">
+  <div class="note-title">3. Connect / Disconnect</div>
+  <span class="usage-tag usage-primary">Primary</span>
+  <p>Opens the serial connection at 115200 baud. On connect, the GUI reads the device configuration and displays it in the Config Status bar. Click again to disconnect.</p>
+</div>
+
+<div id="note-mode">
+  <div class="note-title">4. Mode</div>
+  <span class="usage-tag usage-primary">Primary</span>
+  <p>Selects what data is streamed and how the heatmap is displayed.</p>
+  <p style="margin-top:8px"><b>For device testing:</b></p>
+  <ul style="margin:4px 0 4px 18px; font-size:13px">
+    <li><b>1x12 Manual</b> &mdash; Streams all 32 channels, displays physical channels 1&ndash;12. Use for single-device (no matrix) readout.</li>
+    <li><b>12x12 Matrix</b> &mdash; Scans 12 sequential HV column pairs (0&ndash;11), reads 12 rows. Standard matrix scan for devices.</li>
+  </ul>
+  <p style="margin-top:8px"><b>For resistor matrix calibration:</b></p>
+  <ul style="margin:4px 0 4px 18px; font-size:13px">
+    <li><b>12x12 Debug</b> &mdash; Even HV pairs across both chips with per-column priming. Eliminates crosstalk for clean resistance measurements.</li>
+  </ul>
+  <p style="margin-top:8px; color:#999"><b>Other modes</b> (1x32 All, 1x12 Odd, 12x32 Full, 8x12 Debug) are for debugging and development.</p>
+</div>
+
+<div id="note-status">
+  <div class="note-title">5. Status</div>
+  <span class="usage-tag usage-primary">Primary</span>
+  <p>Shows connection state, streaming status, and live sample rate (samples/s).</p>
+</div>
+
+<div id="note-delay">
+  <div class="note-title">6. Delay (ms)</div>
+  <span class="usage-tag usage-debugging">Debugging only</span>
+  <p>Minimum interval between frames in milliseconds. Default 0 = maximum speed. Only useful for development/testing to slow down the data rate. Leave at 0 for normal operation.</p>
+</div>
+
+<div id="note-start">
+  <div class="note-title">7. Start / Stop</div>
+  <span class="usage-tag usage-primary">Primary</span>
+  <p>Begins continuous binary streaming in the selected mode. The ESP32 sends frames as fast as possible (limited by integration time). Click again to stop. The heatmap and time series update live while streaming.</p>
+</div>
+
+<div id="note-single">
+  <div class="note-title">8. Single Read</div>
+  <span class="usage-tag usage-debugging">Debugging only</span>
+  <p>Performs a one-shot text readout of all 32 channels. Useful for quick verification without starting a stream. Not needed during normal operation.</p>
+</div>
+
+<div id="note-mscan">
+  <div class="note-title">9. Matrix Scan</div>
+  <span class="usage-tag usage-debugging">Debugging only</span>
+  <p>Single-shot 12&times;12 matrix scan via text mode. Takes one snapshot and displays it. For continuous matrix data, use the streaming mode instead.</p>
+</div>
+
+<div id="note-dscan">
+  <div class="note-title">10. Debug Scan</div>
+  <span class="usage-tag usage-debugging">Debugging only</span>
+  <p>Single-shot debug matrix scan (8&times;12 or 12&times;12 depending on mode) with per-column averaging. For continuous debug data, use streaming mode instead.</p>
+</div>
+
+<div id="note-avg">
+  <div class="note-title">11. Avg/col</div>
+  <span class="usage-tag usage-debugging">Debugging only</span>
+  <p>Number of integration cycles averaged per column in debug scan/stream modes. Higher values reduce noise but slow down the frame rate significantly. Default 1 is suitable for normal use. Only increase for detailed noise characterization.</p>
+</div>
+
+<div id="note-units">
+  <div class="note-title">12. Units</div>
+  <span class="usage-tag usage-primary">Primary</span>
+  <p>Controls how values are displayed on the plots:</p>
+  <ul style="margin:4px 0 4px 18px; font-size:13px">
+    <li><b>Bits</b> &mdash; Raw 20-bit ADC codes (0&ndash;1,048,575)</li>
+    <li><b>nA</b> &mdash; Current in nanoamps. Requires correct Range and Int. Time settings.</li>
+    <li><b>pC</b> &mdash; Charge in picocoulombs.</li>
+  </ul>
+  <p style="margin-top:6px">For resistance overlay to work correctly, use <b>nA</b> or <b>pC</b> mode with calibration.</p>
+</div>
+
+<div id="note-sma">
+  <div class="note-title">13. SMA (Simple Moving Average)</div>
+  <span class="usage-tag usage-both">Both</span>
+  <p>Smoothing window for the time series line plot. Set to 1 for no smoothing. Higher values (10, 50, 100) average out noise but add latency to the displayed trace. Does not affect the heatmap or logged data.</p>
+</div>
+
+<div id="note-notch">
+  <div class="note-title">14. Notch Filter</div>
+  <span class="usage-tag usage-both">Both</span>
+  <p>Applies a notch filter to the line plot to remove mains power interference. Select <b>50 Hz</b> or <b>60 Hz</b> depending on your country. Only affects the time series display, not logged data.</p>
+</div>
+
+<div id="note-scale">
+  <div class="note-title">15. Manual Color Scale</div>
+  <span class="usage-tag usage-both">Both</span>
+  <p>When checked, the heatmap color range is fixed to the min&ndash;max values you enter. When unchecked, the color scale auto-adjusts to the data range each frame. Use manual scale when comparing frames or when auto-scale flickers too much.</p>
+</div>
+
+<div id="note-cal">
+  <div class="note-title">16. Calibrate Zero</div>
+  <span class="usage-tag usage-primary">Primary</span>
+  <p>Captures the current average reading (last ~50 frames) as a zero offset. All subsequent data is displayed as the difference from this baseline.</p>
+  <p style="margin-top:8px"><b>For resistance measurement:</b> set VBias1 to a known voltage, click Calibrate Zero with no DUT connected, then connect the DUT. The heatmap will show resistance values (R = V/I) overlaid on each cell.</p>
+</div>
+
+<div id="note-calclear">
+  <div class="note-title">17. Clear Calibration</div>
+  <span class="usage-tag usage-primary">Primary</span>
+  <p>Removes the zero calibration offset and the resistance overlay. Returns to displaying absolute raw values.</p>
+</div>
+
+<div id="note-log">
+  <div class="note-title">18. Start Log / Stop Log</div>
+  <span class="usage-tag usage-primary">Primary</span>
+  <p>Saves all streamed data to a timestamped CSV file. The file header includes all device settings (range, integration time, voltages, etc.) as comment lines. Data rows contain a sample index, timestamp, and all channel/matrix values. Click again to stop logging.</p>
+</div>
+
+<div id="note-heatmap">
+  <div class="note-title">19. Heatmap</div>
+  <span class="usage-tag usage-primary">Primary</span>
+  <p>Color-coded visualization of the latest reading. In single-channel modes this is a 1&times;32 (or 1&times;12) bar. In matrix modes it shows the full row &times; column grid.</p>
+  <p style="margin-top:8px">When <b>Calibrate Zero</b> is active and <b>VBias1</b> is set to a non-zero voltage, calculated resistance values are overlaid on each cell (formatted as ohms, k, M, or G). "OL" means open loop (near-zero current).</p>
+</div>
+
+<div id="note-timeseries">
+  <div class="note-title">20. Time Series</div>
+  <span class="usage-tag usage-primary">Primary</span>
+  <p>Scrolling line plot showing the last 500 samples. In single/manual modes, select which channels to display using the checkboxes below. In matrix modes, use the <b>Show</b> (row/column/average) and <b>Index</b> selectors to choose which traces appear. SMA and notch filters apply to this plot only.</p>
+</div>
+
+<div id="note-chsel">
+  <div class="note-title">21. Channel / Trace Selector</div>
+  <span class="usage-tag usage-primary">Primary</span>
+  <p>In single-channel modes: checkboxes to select which of the 32 channels appear on the time series plot. <b>All</b> / <b>None</b> buttons for quick selection.</p>
+  <p style="margin-top:6px">In matrix modes: this area changes to <b>Show</b> (row / column / average) and <b>Index</b> selectors. "Row 3" shows all columns for physical channel 3; "Column 5" shows all rows for HV pair 5; "Average" shows the mean across all rows or columns.</p>
+</div>
+
+<div id="note-range">
+  <div class="note-title">22. Range</div>
+  <span class="usage-tag usage-primary">Primary</span>
+  <p>Full-scale charge range, set by internal integration capacitors on the DDC232. This determines the maximum measurable current together with the integration time.</p>
+  <p style="margin-top:8px"><b>I<sub>max</sub> = Q<sub>fullscale</sub> / t<sub>integration</sub></b></p>
+  <p style="margin-top:6px">At 1000 &micro;s (1 ms) integration:</p>
+  <table>
+    <tr><td>Range 0</td><td>12.5 pC</td><td>&rarr; <b>12.5 nA</b></td></tr>
+    <tr><td>Range 1</td><td>50 pC</td><td>&rarr; <b>50 nA</b></td></tr>
+    <tr><td>Range 2</td><td>100 pC</td><td>&rarr; <b>100 nA</b></td></tr>
+    <tr><td>Range 3</td><td>150 pC</td><td>&rarr; <b>150 nA</b></td></tr>
+    <tr><td>Range 4</td><td>200 pC</td><td>&rarr; <b>200 nA</b></td></tr>
+    <tr><td>Range 5</td><td>250 pC</td><td>&rarr; <b>250 nA</b></td></tr>
+    <tr><td>Range 6</td><td>300 pC</td><td>&rarr; <b>300 nA</b></td></tr>
+    <tr><td>Range 7</td><td>350 pC</td><td>&rarr; <b>350 nA</b></td></tr>
+  </table>
+  <p style="margin-top:8px">Halving the integration time doubles the max current (e.g. 500 &micro;s &rarr; 100 nA at range 1). Writes the DDC232 config register.</p>
+</div>
+
+<div id="note-inttime">
+  <div class="note-title">23. Integration Time (&micro;s)</div>
+  <span class="usage-tag usage-primary">Primary</span>
+  <p>How long the DDC232 accumulates charge on its internal capacitor each cycle.</p>
+  <ul style="margin:6px 0 6px 18px; font-size:13px">
+    <li><b>Longer</b> (e.g. 5000 &micro;s) = more charge per sample, better signal-to-noise, but lower sample rate and lower max measurable current.</li>
+    <li><b>Shorter</b> (e.g. 200 &micro;s) = faster sample rate and higher max current, but noisier.</li>
+  </ul>
+  <p>Default: 1000 &micro;s (1 ms). Takes effect immediately without rewriting the config register.</p>
+</div>
+
+<div id="note-clk">
+  <div class="note-title">24. System Clock (Hz)</div>
+  <span class="usage-tag usage-debugging">Debugging only</span>
+  <p>DDC232 system clock frequency in Hz (default 10 MHz). Generated by the ESP32 LEDC peripheral. The DDC232 uses this for internal conversion timing. Should not need changing in normal operation.</p>
+</div>
+
+<div id="note-test">
+  <div class="note-title">25. Test Mode</div>
+  <span class="usage-tag usage-debugging">Debugging only</span>
+  <p>Enables the DDC232 internal test mode. Disconnects all analog inputs and measures a zero-input baseline signal internally. Useful for verifying the chip is functioning and characterizing the noise floor without any external connections. Writes the config register.</p>
+</div>
+
+<div id="note-verify">
+  <div class="note-title">26. Verify Config</div>
+  <span class="usage-tag usage-debugging">Debugging only</span>
+  <p>Writes the config register and reads it back via SPI to confirm the DDC232 received the correct settings. The result is shown in the Config Status bar (#30) at the bottom of the window.</p>
+</div>
+
+<div id="note-dac">
+  <div class="note-title">27. DAC Voltage Controls</div>
+  <span class="usage-tag usage-primary">Primary</span>
+  <p>Controls two DAC8562 chips that provide bias and switch voltages:</p>
+  <ul style="margin:6px 0 6px 18px; font-size:13px">
+    <li><b>VBias1</b> (-5 to +5 V) &mdash; Bias voltage channel A. Used as the excitation voltage for resistance measurements. Set this, then calibrate, to see resistance overlay on the heatmap.</li>
+    <li><b>VBias2</b> (-5 to +5 V) &mdash; Bias voltage channel B.</li>
+    <li><b>VSW1</b> (0 to +30 V) &mdash; Positive high-voltage rail for the HV2901 switches. The "POS" position on each switch pair connects to this voltage.</li>
+    <li><b>VSW2</b> (-30 to 0 V) &mdash; Negative high-voltage rail. The "NEG" position connects here.</li>
+  </ul>
+  <p style="margin-top:6px; color:#999">Setting any voltage stops the DAC sine wave generator if it was running (sine wave is a debugging/test feature only available via serial console).</p>
+</div>
+
+<div id="note-hv2">
+  <div class="note-title">28. HV2901 Switch Matrix &mdash; Chip 2</div>
+  <span class="usage-tag usage-both">Both</span>
+  <p>Second HV2901 high-voltage analog switch chip with 16 switch pairs (0&ndash;15). Each pair has two switches sharing a common output pin:</p>
+  <ul style="margin:6px 0 6px 18px; font-size:13px">
+    <li><b>POS</b> &mdash; SW_even ON, connects output to VSW1 (positive rail)</li>
+    <li><b>NEG</b> &mdash; SW_odd ON, connects output to VSW2 (negative rail)</li>
+    <li><b>OFF</b> &mdash; Both switches disconnected</li>
+  </ul>
+  <p style="margin-top:6px">Only one switch per pair can be on at a time (hardware enforced &mdash; both ON = short circuit). In <b>12&times;12 Debug</b> mode, even pairs 0, 2, 4, 6 on this chip are used as columns 8&ndash;11.</p>
+</div>
+
+<div id="note-hv1">
+  <div class="note-title">29. HV2901 Switch Matrix &mdash; Chip 1</div>
+  <span class="usage-tag usage-both">Both</span>
+  <p>Primary HV2901 chip with 16 switch pairs. Same POS/NEG/OFF controls as Chip 2.</p>
+  <p style="margin-top:8px"><b>Skip Vneg</b> checkboxes: when checked, that pair uses OFF instead of NEG when it is <i>inactive</i> during matrix scans. This reduces leakage current through unused columns. Only relevant for pairs that are not being scanned.</p>
+  <p style="margin-top:8px"><b>All OFF</b>: turns off all switches on both chips. <b>All POS / All NEG</b>: sets all 16 pairs on chip 1.</p>
+  <p style="margin-top:8px; color:#999">In <b>12&times;12 Matrix</b> mode, pairs 0&ndash;11 are scanned sequentially. In <b>12&times;12 Debug</b> mode, even pairs 0&ndash;14 are used as columns 0&ndash;7.</p>
+</div>
+
+<div id="note-cfgstatus">
+  <div class="note-title">30. Config Status</div>
+  <span class="usage-tag usage-debugging">Debugging only</span>
+  <p>Displays the DDC232 config register readback from the device. Shows the FSR (range), format, version, CLK_4X, and test mode bits as read back from the chip via SPI. Updated when you click <b>Verify Config</b> or change Range / Test Mode.</p>
+</div>
+
+</div><!-- end hidden templates -->
+
+<script>
+function showNote(spot, event) {
+  const noteId = spot.getAttribute('data-note');
+  const template = document.getElementById(noteId);
+  if (!template) return;
+
+  const noteEl = document.getElementById('floatingNote');
+  const backdrop = document.getElementById('backdrop');
+  const content = document.getElementById('noteContent');
+
+  content.innerHTML = template.innerHTML;
+
+  // Position near the click, but keep on screen
+  let x = event.clientX + 16;
+  let y = event.clientY - 20;
+
+  // Show first to measure
+  noteEl.classList.add('open');
+  backdrop.classList.add('open');
+
+  const rect = noteEl.getBoundingClientRect();
+  const vw = window.innerWidth;
+  const vh = window.innerHeight;
+
+  if (x + rect.width > vw - 20) x = vw - rect.width - 20;
+  if (x < 10) x = 10;
+  if (y + rect.height > vh - 20) y = vh - rect.height - 20;
+  if (y < 10) y = 10;
+
+  noteEl.style.left = x + 'px';
+  noteEl.style.top = y + 'px';
+}
+
+function closeNote() {
+  document.getElementById('floatingNote').classList.remove('open');
+  document.getElementById('backdrop').classList.remove('open');
+}
+
+// Close on Escape
+document.addEventListener('keydown', function(e) {
+  if (e.key === 'Escape') closeNote();
+});
+</script>
+
+</body>
+</html>
