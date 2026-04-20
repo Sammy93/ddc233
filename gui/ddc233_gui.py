@@ -499,6 +499,7 @@ class DDC233Gui:
         # FPS tracking
         self._sample_count = 0
         self._fps_time = time.time()
+        self._measured_fps = 0.0
         self._last_plot_time = 0
         self._last_gc_time = 0
 
@@ -1681,9 +1682,11 @@ class DDC233Gui:
             self.reader.stop_streaming()
             self.stream_btn.config(text="Start")
             self.status_var.set("Stopped")
+            self._measured_fps = 0.0
         else:
             mode = self._get_mode()
             stream_mode = "single" if mode in ("odd", "manual") else mode
+            self._measured_fps = 0.0
             self.reader.start_streaming(mode=stream_mode,
                                         dbg_avg=self._get_dbg_avg())
             self.stream_btn.config(text="Stop")
@@ -1999,6 +2002,7 @@ class DDC233Gui:
             elapsed = now - self._fps_time
             if elapsed >= 1.0:
                 fps = self._sample_count / elapsed
+                self._measured_fps = fps
                 self.status_var.set(f"{'Streaming' if self.reader.streaming else 'Connected'}  |  {fps:.1f} samples/s")
                 self._sample_count = 0
                 self._fps_time = now
@@ -2078,21 +2082,50 @@ class DDC233Gui:
         return 0.0
 
     def _get_sample_rate(self):
-        """Estimate sample rate from integration time setting."""
+        """Return the effective sample (frame) rate in Hz.
+
+        Uses the measured FPS when available.  Falls back to an estimate
+        based on the integration time and the number of columns scanned
+        per frame in matrix modes.
+        """
+        if self._measured_fps > 0:
+            return self._measured_fps
+
         try:
             int_us = float(self.inttime_var.get())
         except ValueError:
             int_us = 1000.0
         if int_us <= 0:
             int_us = 1000.0
+
+        # For matrix modes the frame period is n_cols × integration time
+        mode = self.display_mode
+        if mode == "matrix":
+            return 1e6 / (MATRIX_COLS * int_us)
+        elif mode == "full":
+            return 1e6 / (FULL_MATRIX_COLS * int_us)
+        elif mode == "debug":
+            return 1e6 / (DBG_MATRIX_COLS * int_us)
+        elif mode == "debug12":
+            return 1e6 / (DBG12_MATRIX_COLS * int_us)
         return 1e6 / int_us
 
     @staticmethod
-    def _apply_notch(data, fs, f0, Q=30.0):
-        """Apply a second-order IIR notch filter at f0 Hz along axis 0."""
-        if f0 <= 0 or fs <= 2.0 * f0 or data.shape[0] < 3:
+    def _apply_notch(data, fs, f0, Q=3.0):
+        """Apply a second-order IIR notch filter at f0 Hz along axis 0.
+
+        When f0 exceeds the Nyquist frequency (fs/2), the filter
+        automatically targets the aliased frequency instead.
+        """
+        if f0 <= 0 or fs <= 0 or data.shape[0] < 3:
             return data
-        w0 = 2.0 * np.pi * f0 / fs
+        # Fold f0 into [0, fs/2] to handle aliasing
+        f_eff = f0 % fs
+        if f_eff > fs / 2:
+            f_eff = fs - f_eff
+        if f_eff <= 0:
+            return data
+        w0 = 2.0 * np.pi * f_eff / fs
         cos_w0 = np.cos(w0)
         alpha = np.sin(w0) / (2.0 * Q)
         inv_a0 = 1.0 / (1.0 + alpha)
