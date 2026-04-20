@@ -1392,8 +1392,15 @@ class DDC233Gui:
     # Helpers
     # ----------------------------------------------------------------
 
-    def _send_and_read_response(self, cmd: str, wait: float = 0.5) -> list:
-        """Send a command and collect response lines. Pauses streaming if active."""
+    def _send_and_read_response(self, cmd: str, wait: float = 0.5,
+                                resume: bool = True) -> list:
+        """Send a command and collect response lines. Pauses streaming if active.
+
+        Args:
+            resume: If False, don't restart streaming afterwards (caller will
+                    handle it).  Use this when sending multiple commands in
+                    sequence to avoid a stop/start race between each one.
+        """
         if not self.reader.ser or not self.reader.ser.is_open:
             return []
 
@@ -1417,7 +1424,7 @@ class DDC233Gui:
             if retries > 0:
                 time.sleep(0.1)
 
-        if was_streaming:
+        if was_streaming and resume:
             mode = self._get_mode()
             stream_mode = "single" if mode in ("odd", "manual") else mode
             self.reader.start_streaming(mode=stream_mode,
@@ -1496,8 +1503,10 @@ class DDC233Gui:
             self.ax_heat.set_yticklabels(row_labels, fontsize=7)
 
             # Update trace index combo for correct number of cols/rows
+            # "Row traces" → each trace is a row, index selects column
+            # "Column traces" → each trace is a column, index selects row
             self.trace_idx_combo["values"] = [str(i) for i in range(
-                n_rows if self.trace_mode_var.get() == "row" else n_cols)]
+                n_cols if self.trace_mode_var.get() == "row" else n_rows)]
 
             # Show matrix trace selector, hide channel checkboxes
             self.ch_inner.pack_forget()
@@ -1807,7 +1816,7 @@ class DDC233Gui:
 
     def _set_range(self):
         idx = self.range_var.get().split(" ")[0]
-        self._send_and_read_response(f"range {idx}", wait=0.8)
+        self._send_and_read_response(f"range {idx}", wait=0.8, resume=False)
         self._update_config_status()
 
     def _set_inttime(self):
@@ -1826,7 +1835,7 @@ class DDC233Gui:
 
     def _set_test(self):
         state = "on" if self.test_var.get() else "off"
-        self._send_and_read_response(f"test {state}", wait=0.8)
+        self._send_and_read_response(f"test {state}", wait=0.8, resume=False)
         self._update_config_status()
 
     def _set_vbias1(self):
@@ -2475,6 +2484,27 @@ class DDC233Gui:
             trace_labels = ["Mean (all pixels)"]
             title_detail = "Mean of all pixels"
         elif self.matrix_trace_mode == "row":
+            # "Row traces": each trace is a row; index selects column
+            if trace_idx >= MATRIX_COLS:
+                trace_idx = 0
+            n_cols = MATRIX_ROWS
+            if self.matrix_history_filled:
+                n_tail = HISTORY_LEN - idx
+                self._work_buf[:n_tail, :n_cols] = self.matrix_history[idx:, trace_idx, :]
+                self._work_buf[n_tail:HISTORY_LEN, :n_cols] = self.matrix_history[:idx, trace_idx, :]
+            else:
+                self._work_buf[:length, :n_cols] = self.matrix_history[:length, trace_idx, :]
+            traces = self._work_buf[:length, :n_cols].copy()
+            if self.matrix_calibration is not None:
+                np.subtract(traces, self.matrix_calibration[trace_idx, :], out=traces)
+            if offset:
+                np.subtract(traces, offset, out=traces)
+            if scale != 1.0:
+                np.multiply(traces, scale, out=traces)
+            trace_labels = [f"Ch {MATRIX_ROW_PHYSICAL[r]}" for r in range(MATRIX_ROWS)]
+            title_detail = f"Col {trace_idx}"
+        else:  # column
+            # "Column traces": each trace is a column; index selects row
             if trace_idx >= MATRIX_ROWS:
                 trace_idx = 0
             n_cols = MATRIX_COLS
@@ -2494,25 +2524,6 @@ class DDC233Gui:
             trace_labels = [f"Col {c}" for c in range(MATRIX_COLS)]
             phys_ch = MATRIX_ROW_PHYSICAL[trace_idx]
             title_detail = f"Row {phys_ch}"
-        else:  # column
-            if trace_idx >= MATRIX_COLS:
-                trace_idx = 0
-            n_cols = MATRIX_ROWS
-            if self.matrix_history_filled:
-                n_tail = HISTORY_LEN - idx
-                self._work_buf[:n_tail, :n_cols] = self.matrix_history[idx:, trace_idx, :]
-                self._work_buf[n_tail:HISTORY_LEN, :n_cols] = self.matrix_history[:idx, trace_idx, :]
-            else:
-                self._work_buf[:length, :n_cols] = self.matrix_history[:length, trace_idx, :]
-            traces = self._work_buf[:length, :n_cols].copy()
-            if self.matrix_calibration is not None:
-                np.subtract(traces, self.matrix_calibration[trace_idx, :], out=traces)
-            if offset:
-                np.subtract(traces, offset, out=traces)
-            if scale != 1.0:
-                np.multiply(traces, scale, out=traces)
-            trace_labels = [f"Ch {MATRIX_ROW_PHYSICAL[r]}" for r in range(MATRIX_ROWS)]
-            title_detail = f"Col {trace_idx}"
 
         # Append mean overlay if checkbox is on and not already in avg mode
         show_mean = self.show_mean_var.get() and self.matrix_trace_mode != "avg"
@@ -2623,6 +2634,27 @@ class DDC233Gui:
         trace_idx = self.matrix_trace_idx
 
         if self.matrix_trace_mode == "row":
+            # "Row traces": each trace is a row; index selects column
+            if trace_idx >= FULL_MATRIX_COLS:
+                trace_idx = 0
+            n_cols = FULL_MATRIX_ROWS
+            if self.full_history_filled:
+                n_tail = HISTORY_LEN - idx
+                self._work_buf[:n_tail, :n_cols] = self.full_history[idx:, trace_idx, :]
+                self._work_buf[n_tail:HISTORY_LEN, :n_cols] = self.full_history[:idx, trace_idx, :]
+            else:
+                self._work_buf[:length, :n_cols] = self.full_history[:length, trace_idx, :]
+            traces = self._work_buf[:length, :n_cols]
+            if self.full_calibration is not None:
+                np.subtract(traces, self.full_calibration[trace_idx, :], out=traces)
+            if offset:
+                np.subtract(traces, offset, out=traces)
+            if scale != 1.0:
+                np.multiply(traces, scale, out=traces)
+            trace_labels = [f"Ch {r + 1}" for r in range(FULL_MATRIX_ROWS)]
+            title_detail = f"Col {trace_idx}"
+        else:
+            # "Column traces": each trace is a column; index selects row
             if trace_idx >= FULL_MATRIX_ROWS:
                 trace_idx = 0
             n_cols = FULL_MATRIX_COLS
@@ -2642,25 +2674,6 @@ class DDC233Gui:
             trace_labels = [f"Col {c}" for c in range(FULL_MATRIX_COLS)]
             phys_ch = trace_idx + 1
             title_detail = f"Row {phys_ch}"
-        else:
-            if trace_idx >= FULL_MATRIX_COLS:
-                trace_idx = 0
-            n_cols = FULL_MATRIX_ROWS
-            if self.full_history_filled:
-                n_tail = HISTORY_LEN - idx
-                self._work_buf[:n_tail, :n_cols] = self.full_history[idx:, trace_idx, :]
-                self._work_buf[n_tail:HISTORY_LEN, :n_cols] = self.full_history[:idx, trace_idx, :]
-            else:
-                self._work_buf[:length, :n_cols] = self.full_history[:length, trace_idx, :]
-            traces = self._work_buf[:length, :n_cols]
-            if self.full_calibration is not None:
-                np.subtract(traces, self.full_calibration[trace_idx, :], out=traces)
-            if offset:
-                np.subtract(traces, offset, out=traces)
-            if scale != 1.0:
-                np.multiply(traces, scale, out=traces)
-            trace_labels = [f"Ch {r + 1}" for r in range(FULL_MATRIX_ROWS)]
-            title_detail = f"Col {trace_idx}"
 
         notch_f = self._get_notch_freq()
         if notch_f > 0:
@@ -2770,25 +2783,7 @@ class DDC233Gui:
 
         # Reorder traces into pre-allocated buffer (avoids np.concatenate)
         if self.matrix_trace_mode == "row":
-            if trace_idx >= DBG_MATRIX_ROWS:
-                trace_idx = 0
-            n_cols = DBG_MATRIX_COLS
-            if self.dbg_history_filled:
-                n_tail = HISTORY_LEN - idx
-                self._work_buf[:n_tail, :n_cols] = self.dbg_history[idx:, :, trace_idx]
-                self._work_buf[n_tail:HISTORY_LEN, :n_cols] = self.dbg_history[:idx, :, trace_idx]
-            else:
-                self._work_buf[:length, :n_cols] = self.dbg_history[:length, :, trace_idx]
-            traces = self._work_buf[:length, :n_cols]
-            if self.dbg_calibration is not None:
-                np.subtract(traces, self.dbg_calibration[:, trace_idx], out=traces)
-            if offset:
-                np.subtract(traces, offset, out=traces)
-            if scale != 1.0:
-                np.multiply(traces, scale, out=traces)
-            trace_labels = [f"P{DBG_COL_PAIRS[i]}" for i in range(DBG_MATRIX_COLS)]
-            title_detail = f"Ch {DBG_ROW_PHYSICAL[trace_idx]}"
-        else:
+            # "Row traces": each trace is a row; index selects column
             if trace_idx >= DBG_MATRIX_COLS:
                 trace_idx = 0
             n_cols = DBG_MATRIX_ROWS
@@ -2807,6 +2802,26 @@ class DDC233Gui:
                 np.multiply(traces, scale, out=traces)
             trace_labels = [f"Ch {DBG_ROW_PHYSICAL[r]}" for r in range(DBG_MATRIX_ROWS)]
             title_detail = f"P{DBG_COL_PAIRS[trace_idx]}"
+        else:
+            # "Column traces": each trace is a column; index selects row
+            if trace_idx >= DBG_MATRIX_ROWS:
+                trace_idx = 0
+            n_cols = DBG_MATRIX_COLS
+            if self.dbg_history_filled:
+                n_tail = HISTORY_LEN - idx
+                self._work_buf[:n_tail, :n_cols] = self.dbg_history[idx:, :, trace_idx]
+                self._work_buf[n_tail:HISTORY_LEN, :n_cols] = self.dbg_history[:idx, :, trace_idx]
+            else:
+                self._work_buf[:length, :n_cols] = self.dbg_history[:length, :, trace_idx]
+            traces = self._work_buf[:length, :n_cols]
+            if self.dbg_calibration is not None:
+                np.subtract(traces, self.dbg_calibration[:, trace_idx], out=traces)
+            if offset:
+                np.subtract(traces, offset, out=traces)
+            if scale != 1.0:
+                np.multiply(traces, scale, out=traces)
+            trace_labels = [f"P{DBG_COL_PAIRS[i]}" for i in range(DBG_MATRIX_COLS)]
+            title_detail = f"Ch {DBG_ROW_PHYSICAL[trace_idx]}"
 
         # Apply notch filter
         notch_f = self._get_notch_freq()
@@ -2917,25 +2932,7 @@ class DDC233Gui:
         trace_idx = self.matrix_trace_idx
 
         if self.matrix_trace_mode == "row":
-            if trace_idx >= DBG12_MATRIX_ROWS:
-                trace_idx = 0
-            n_cols = DBG12_MATRIX_COLS
-            if self.dbg12_history_filled:
-                n_tail = HISTORY_LEN - idx
-                self._work_buf[:n_tail, :n_cols] = self.dbg12_history[idx:, :, trace_idx]
-                self._work_buf[n_tail:HISTORY_LEN, :n_cols] = self.dbg12_history[:idx, :, trace_idx]
-            else:
-                self._work_buf[:length, :n_cols] = self.dbg12_history[:length, :, trace_idx]
-            traces = self._work_buf[:length, :n_cols]
-            if self.dbg12_calibration is not None:
-                np.subtract(traces, self.dbg12_calibration[:, trace_idx], out=traces)
-            if offset:
-                np.subtract(traces, offset, out=traces)
-            if scale != 1.0:
-                np.multiply(traces, scale, out=traces)
-            trace_labels = DBG12_COL_LABELS
-            title_detail = f"Ch {DBG12_ROW_PHYSICAL[trace_idx]}"
-        else:
+            # "Row traces": each trace is a row; index selects column
             if trace_idx >= DBG12_MATRIX_COLS:
                 trace_idx = 0
             n_cols = DBG12_MATRIX_ROWS
@@ -2954,6 +2951,26 @@ class DDC233Gui:
                 np.multiply(traces, scale, out=traces)
             trace_labels = [f"Ch {DBG12_ROW_PHYSICAL[r]}" for r in range(DBG12_MATRIX_ROWS)]
             title_detail = DBG12_COL_LABELS[trace_idx]
+        else:
+            # "Column traces": each trace is a column; index selects row
+            if trace_idx >= DBG12_MATRIX_ROWS:
+                trace_idx = 0
+            n_cols = DBG12_MATRIX_COLS
+            if self.dbg12_history_filled:
+                n_tail = HISTORY_LEN - idx
+                self._work_buf[:n_tail, :n_cols] = self.dbg12_history[idx:, :, trace_idx]
+                self._work_buf[n_tail:HISTORY_LEN, :n_cols] = self.dbg12_history[:idx, :, trace_idx]
+            else:
+                self._work_buf[:length, :n_cols] = self.dbg12_history[:length, :, trace_idx]
+            traces = self._work_buf[:length, :n_cols]
+            if self.dbg12_calibration is not None:
+                np.subtract(traces, self.dbg12_calibration[:, trace_idx], out=traces)
+            if offset:
+                np.subtract(traces, offset, out=traces)
+            if scale != 1.0:
+                np.multiply(traces, scale, out=traces)
+            trace_labels = DBG12_COL_LABELS
+            title_detail = f"Ch {DBG12_ROW_PHYSICAL[trace_idx]}"
 
         notch_f = self._get_notch_freq()
         if notch_f > 0:
