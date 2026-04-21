@@ -1833,14 +1833,16 @@ class DDC233Gui:
         if not val.isdigit() or int(val) == 0:
             self.status_var.set("Invalid integration time")
             return
-        self._send_and_read_response(f"inttime {val}")
+        self._send_and_read_response(f"inttime {val}", resume=False)
+        self._update_config_status()
 
     def _set_clk(self):
         val = self.clk_var.get().strip()
         if not val.isdigit() or int(val) == 0:
             self.status_var.set("Invalid clock frequency")
             return
-        self._send_and_read_response(f"clk {val}")
+        self._send_and_read_response(f"clk {val}", resume=False)
+        self._update_config_status()
 
     def _set_test(self):
         state = "on" if self.test_var.get() else "off"
