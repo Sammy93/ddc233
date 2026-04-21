@@ -660,6 +660,9 @@ class DDC233Gui:
             width=5, state="readonly",
         )
         notch_combo.pack(side=tk.LEFT, padx=(2, 5))
+        self.notch_info_var = tk.StringVar(value="")
+        ttk.Label(row2, textvariable=self.notch_info_var,
+                  foreground="gray").pack(side=tk.LEFT, padx=(0, 5))
 
         # Manual color scale
         ttk.Separator(row2, orient=tk.VERTICAL).pack(
@@ -929,6 +932,7 @@ class DDC233Gui:
             font=("Courier", 13, "bold"), foreground="white",
             background="#2c3e50", anchor="w", justify=tk.LEFT,
             padx=10, pady=6, relief=tk.SUNKEN,
+            height=2,
         )
         self.config_status_label.pack(fill=tk.X, padx=5, pady=3)
 
@@ -1450,8 +1454,10 @@ class DDC233Gui:
             display = []
             for line in lines:
                 if any(k in line for k in ["readback", "Config readback", "FSR=", "Rev ID"]):
-                    display.append(line)
-            self.config_status_var.set("\n".join(display) if display else "\n".join(lines))
+                    display.append(line[:120])
+            text = "\n".join(display) if display else "\n".join(
+                l[:120] for l in lines[:3])
+            self.config_status_var.set(text)
         else:
             self.config_status_var.set("No response from device")
 
@@ -2007,6 +2013,9 @@ class DDC233Gui:
                 self._sample_count = 0
                 self._fps_time = now
 
+            # Update notch info label
+            self._update_notch_info()
+
             # Throttle plot updates — redraw at most every 200 ms (5 fps)
             if now - self._last_plot_time >= 0.2:
                 if self.display_mode == "matrix":
@@ -2081,6 +2090,24 @@ class DDC233Gui:
             return 60.0
         return 0.0
 
+    def _update_notch_info(self):
+        """Update the notch info label with effective frequencies and fs."""
+        f0 = self._get_notch_freq()
+        if f0 <= 0:
+            self.notch_info_var.set("")
+            return
+        fs = self._get_sample_rate()
+        nyq = fs / 2
+        freqs = []
+        for h in range(1, 7):
+            f = f0 * h
+            f_eff = f % fs
+            if f_eff > nyq:
+                f_eff = fs - f_eff
+            if 5.0 < f_eff < nyq - 0.5:
+                freqs.append(f"{f_eff:.1f}")
+        self.notch_info_var.set(f"→ {', '.join(freqs)} Hz  (fs={fs:.0f})")
+
     def _get_sample_rate(self):
         """Return the effective sample (frame) rate in Hz.
 
@@ -2111,20 +2138,8 @@ class DDC233Gui:
         return 1e6 / int_us
 
     @staticmethod
-    def _apply_notch(data, fs, f0, Q=3.0):
-        """Apply a second-order IIR notch filter at f0 Hz along axis 0.
-
-        When f0 exceeds the Nyquist frequency (fs/2), the filter
-        automatically targets the aliased frequency instead.
-        """
-        if f0 <= 0 or fs <= 0 or data.shape[0] < 3:
-            return data
-        # Fold f0 into [0, fs/2] to handle aliasing
-        f_eff = f0 % fs
-        if f_eff > fs / 2:
-            f_eff = fs - f_eff
-        if f_eff <= 0:
-            return data
+    def _apply_notch_single(data, fs, f_eff, Q=3.0):
+        """Apply one second-order IIR notch at f_eff Hz along axis 0."""
         w0 = 2.0 * np.pi * f_eff / fs
         cos_w0 = np.cos(w0)
         alpha = np.sin(w0) / (2.0 * Q)
@@ -2150,6 +2165,27 @@ class DDC233Gui:
         out = np.empty_like(data)
         for c in range(data.shape[1]):
             out[:, c] = _filt_col(data[:, c])
+        return out
+
+    @staticmethod
+    def _apply_notch(data, fs, f0, Q=3.0):
+        """Apply cascaded notch filters at f0 and its harmonics.
+
+        Each harmonic is folded into [0, fs/2] to handle aliasing.
+        Harmonics that land too close to DC or Nyquist are skipped.
+        """
+        if f0 <= 0 or fs <= 0 or data.shape[0] < 3:
+            return data
+        nyq = fs / 2
+        out = data
+        for harmonic in range(1, 7):  # 1× through 6× (up to 300 Hz for 50 Hz)
+            f = f0 * harmonic
+            f_eff = f % fs
+            if f_eff > nyq:
+                f_eff = fs - f_eff
+            if f_eff < 5.0 or f_eff > nyq - 0.5:
+                continue
+            out = DDC233Gui._apply_notch_single(out, fs, f_eff, Q)
         return out
 
     def _update_plots(self):
