@@ -2058,7 +2058,11 @@ class DDC233Gui:
             elapsed = now - self._fps_time
             if elapsed >= 1.0:
                 fps = self._sample_count / elapsed
-                self._measured_fps = fps
+                # Smooth with EMA (alpha=0.3) to remove USB jitter
+                if self._measured_fps > 0:
+                    self._measured_fps = 0.3 * fps + 0.7 * self._measured_fps
+                else:
+                    self._measured_fps = fps
                 self.status_var.set(f"{'Streaming' if self.reader.streaming else 'Connected'}  |  {fps:.1f} samples/s")
                 self._sample_count = 0
                 self._fps_time = now
@@ -2183,9 +2187,9 @@ class DDC233Gui:
     def _get_sample_rate(self):
         """Return the effective sample (frame) rate in Hz.
 
-        Uses the measured FPS when available.  Falls back to an estimate
-        based on the integration time and the number of columns scanned
-        per frame in matrix modes.
+        Uses smoothed measured FPS when available (EMA removes USB jitter
+        while tracking the real firmware rate which includes per-column
+        overhead).  Falls back to an estimate from integration time.
         """
         if self._measured_fps > 0:
             return self._measured_fps
