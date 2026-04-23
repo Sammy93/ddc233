@@ -643,10 +643,10 @@ class DDC233Gui:
 
         # SMA filter
         ttk.Label(row2, text="SMA:").pack(side=tk.LEFT)
-        self.sma_var = tk.StringVar(value="1")
+        self.sma_var = tk.StringVar(value="30")
         sma_combo = ttk.Combobox(
             row2, textvariable=self.sma_var,
-            values=["1", "5", "10", "20", "50", "100", "200"],
+            values=["1", "5", "10", "20", "30", "50", "100", "200"],
             width=4, state="readonly",
         )
         sma_combo.pack(side=tk.LEFT, padx=(2, 5))
@@ -2093,22 +2093,15 @@ class DDC233Gui:
         return 0.0
 
     def _update_notch_info(self):
-        """Update the notch info label with effective frequencies and fs."""
+        """Update the notch info label with LS filter parameters."""
         f0 = self._get_notch_freq()
         if f0 <= 0:
             self.notch_info_var.set("")
             return
         fs = self._get_sample_rate()
-        nyq = fs / 2
-        freqs = []
-        for h in range(1, 7):
-            f = f0 * h
-            f_eff = f % fs
-            if f_eff > nyq:
-                f_eff = fs - f_eff
-            if 5.0 < f_eff < nyq - 0.5:
-                freqs.append(f"{f_eff:.1f}")
-        self.notch_info_var.set(f"→ {', '.join(freqs)} Hz  (fs={fs:.0f})")
+        self.notch_info_var.set(
+            f"LS K=4 win=30  (fs={fs:.0f})"
+        )
 
     def _get_sample_rate(self):
         """Return the effective sample (frame) rate in Hz.
@@ -2140,54 +2133,85 @@ class DDC233Gui:
         return 1e6 / int_us
 
     @staticmethod
-    def _apply_notch_single(data, fs, f_eff, Q=3.0):
-        """Apply one second-order IIR notch at f_eff Hz along axis 0."""
-        w0 = 2.0 * np.pi * f_eff / fs
-        cos_w0 = np.cos(w0)
-        alpha = np.sin(w0) / (2.0 * Q)
-        inv_a0 = 1.0 / (1.0 + alpha)
-        b0 = inv_a0
-        b1 = -2.0 * cos_w0 * inv_a0
-        b2 = inv_a0
-        a1 = b1
-        a2 = (1.0 - alpha) * inv_a0
+    def _apply_notch(data, fs, f0, _Q=3.0):
+        """Remove mains interference using windowed LS sinusoidal subtraction.
 
-        def _filt_col(x):
-            n = len(x)
-            y = np.empty(n)
-            y[0] = b0 * x[0]
-            y[1] = b0 * x[1] + b1 * x[0] - a1 * y[0]
-            for i in range(2, n):
-                y[i] = (b0 * x[i] + b1 * x[i-1] + b2 * x[i-2]
-                        - a1 * y[i-1] - a2 * y[i-2])
-            return y
+        Fits and subtracts f0 plus K-1 harmonics in a sliding window
+        using synthesized uniform timestamps.  Immune to aliasing.
 
-        if data.ndim == 1:
-            return _filt_col(data)
-        out = np.empty_like(data)
-        for c in range(data.shape[1]):
-            out[:, c] = _filt_col(data[:, c])
-        return out
-
-    @staticmethod
-    def _apply_notch(data, fs, f0, Q=3.0):
-        """Apply cascaded notch filters at f0 and its harmonics.
-
-        Each harmonic is folded into [0, fs/2] to handle aliasing.
-        Harmonics that land too close to DC or Nyquist are skipped.
+        Vectorized: precomputes the projection matrix for the common
+        (full-size) window and applies it to all interior samples in
+        one batched matrix multiply.  Edge samples use per-sample fits.
         """
-        if f0 <= 0 or fs <= 0 or data.shape[0] < 3:
+        K = 4       # harmonics: f0, 2*f0, 3*f0, 4*f0
+        win = 30    # sliding window size (samples)
+
+        if f0 <= 0 or fs <= 0 or data.shape[0] < 2 * K + 1:
             return data
-        nyq = fs / 2
-        out = data
-        for harmonic in range(1, 7):  # 1× through 6× (up to 300 Hz for 50 Hz)
-            f = f0 * harmonic
-            f_eff = f % fs
-            if f_eff > nyq:
-                f_eff = fs - f_eff
-            if f_eff < 5.0 or f_eff > nyq - 0.5:
-                continue
-            out = DDC233Gui._apply_notch_single(out, fs, f_eff, Q)
+
+        N = data.shape[0]
+        half = win // 2
+        ensure_2d = data.ndim == 1
+        if ensure_2d:
+            data = data[:, np.newaxis]
+
+        out = np.empty_like(data, dtype=float)
+
+        # ── Build design matrix for a full-size window (win samples) ──
+        t_full = np.arange(win) / fs
+        X_full = np.empty((win, 2 * K))
+        for k in range(1, K + 1):
+            phase = 2.0 * np.pi * k * f0 * t_full
+            X_full[:, 2 * (k - 1)] = np.cos(phase)
+            X_full[:, 2 * (k - 1) + 1] = np.sin(phase)
+
+        # Projection matrix P = X (X^T X)^{-1} X^T   (win × win)
+        # The residual for a window is  (I - P) @ data_window
+        # We only need row `half` of (I - P) for each center sample.
+        XtX_inv = np.linalg.inv(X_full.T @ X_full)
+        # hat_row = X_full[half] @ XtX_inv @ X_full.T   → (win,)
+        hat_row = X_full[half] @ XtX_inv @ X_full.T
+        # residual weights: e_half - hat_row  (identity row minus hat row)
+        res_weights = -hat_row.copy()
+        res_weights[half] += 1.0  # (win,) weights to get residual at center
+
+        # ── Interior samples: batched dot product ──
+        # For sample i in [half, N-half), the window is data[i-half : i-half+win]
+        # and the filtered value is res_weights @ data[i-half : i-half+win]
+        n_interior = N - win + 1
+        if n_interior > 0:
+            # Build a (n_interior, win, C) view using stride tricks
+            C = data.shape[1]
+            from numpy.lib.stride_tricks import as_strided
+            item = data.strides[0]
+            col_stride = data.strides[1]
+            windows = as_strided(
+                data, shape=(n_interior, win, C),
+                strides=(item, item, col_stride),
+            )
+            # (n_interior, win, C) contracted with (win,) → (n_interior, C)
+            out[half:half + n_interior] = np.einsum(
+                'j,ijc->ic', res_weights, windows
+            )
+
+        # ── Edge samples: small per-sample LS fits ──
+        ts = np.arange(N) / fs
+        for i in list(range(min(half, N))) + \
+                 list(range(max(half + n_interior, 0), N)):
+            lo = max(0, i - half)
+            hi = min(N, i + half + 1)
+            t_w = ts[lo:hi] - ts[lo]
+            w = hi - lo
+            X_e = np.empty((w, 2 * K))
+            for k in range(1, K + 1):
+                phase = 2.0 * np.pi * k * f0 * t_w
+                X_e[:, 2 * (k - 1)] = np.cos(phase)
+                X_e[:, 2 * (k - 1) + 1] = np.sin(phase)
+            beta, _, _, _ = np.linalg.lstsq(X_e, data[lo:hi], rcond=None)
+            out[i] = data[i] - X_e[i - lo] @ beta
+
+        if ensure_2d:
+            out = out[:, 0]
         return out
 
     def _update_plots(self):
