@@ -2143,10 +2143,32 @@ class DDC233Gui:
         (full-size) window and applies it to all interior samples in
         one batched matrix multiply.  Edge samples use per-sample fits.
         """
-        K = 4       # harmonics: f0, 2*f0, 3*f0, 4*f0
+        K_max = 4   # try up to 4 harmonics: f0, 2*f0, 3*f0, 4*f0
         win = 30    # sliding window size (samples)
 
-        if f0 <= 0 or fs <= 0 or data.shape[0] < 2 * K + 1:
+        if f0 <= 0 or fs <= 0 or data.shape[0] < 3:
+            return data
+
+        nyq = fs / 2
+
+        # ── Select harmonics that don't alias near DC or Nyquist ──
+        valid_harmonics = []
+        used_aliases = []
+        for k in range(1, K_max + 1):
+            f_alias = (f0 * k) % fs
+            if f_alias > nyq:
+                f_alias = fs - f_alias
+            # Skip near-DC or near-Nyquist (same guard as old biquad)
+            if f_alias < 2.0 or f_alias > nyq - 1.0:
+                continue
+            # Skip if too close to an already-included alias
+            if any(abs(f_alias - fa) < 1.0 for fa in used_aliases):
+                continue
+            valid_harmonics.append(k)
+            used_aliases.append(f_alias)
+
+        K = len(valid_harmonics)
+        if K == 0:
             return data
 
         N = data.shape[0]
@@ -2160,15 +2182,15 @@ class DDC233Gui:
         # ── Build design matrix for a full-size window (win samples) ──
         t_full = np.arange(win) / fs
         X_full = np.empty((win, 2 * K))
-        for k in range(1, K + 1):
+        for idx, k in enumerate(valid_harmonics):
             phase = 2.0 * np.pi * k * f0 * t_full
-            X_full[:, 2 * (k - 1)] = np.cos(phase)
-            X_full[:, 2 * (k - 1) + 1] = np.sin(phase)
+            X_full[:, 2 * idx] = np.cos(phase)
+            X_full[:, 2 * idx + 1] = np.sin(phase)
 
         # Projection matrix P = X (X^T X)^{-1} X^T   (win × win)
         # The residual for a window is  (I - P) @ data_window
         # We only need row `half` of (I - P) for each center sample.
-        XtX_inv = np.linalg.inv(X_full.T @ X_full)
+        XtX_inv = np.linalg.pinv(X_full.T @ X_full)
         # hat_row = X_full[half] @ XtX_inv @ X_full.T   → (win,)
         hat_row = X_full[half] @ XtX_inv @ X_full.T
         # residual weights: e_half - hat_row  (identity row minus hat row)
@@ -2202,11 +2224,14 @@ class DDC233Gui:
             hi = min(N, i + half + 1)
             t_w = ts[lo:hi] - ts[lo]
             w = hi - lo
+            if w < 2 * K + 1:
+                out[i] = data[i]
+                continue
             X_e = np.empty((w, 2 * K))
-            for k in range(1, K + 1):
+            for idx_k, k in enumerate(valid_harmonics):
                 phase = 2.0 * np.pi * k * f0 * t_w
-                X_e[:, 2 * (k - 1)] = np.cos(phase)
-                X_e[:, 2 * (k - 1) + 1] = np.sin(phase)
+                X_e[:, 2 * idx_k] = np.cos(phase)
+                X_e[:, 2 * idx_k + 1] = np.sin(phase)
             beta, _, _, _ = np.linalg.lstsq(X_e, data[lo:hi], rcond=None)
             out[i] = data[i] - X_e[i - lo] @ beta
 
