@@ -2144,7 +2144,9 @@ class DDC233Gui:
         one batched matrix multiply.  Edge samples use per-sample fits.
         """
         K_max = 4   # try up to 4 harmonics: f0, 2*f0, 3*f0, 4*f0
-        win = 30    # sliding window size (samples)
+        # Window must span enough cycles for a stable fit.
+        # Use ~5 cycles of the fundamental (100 ms for 50 Hz).
+        win = max(30, round(5.0 / f0 * fs))
 
         if f0 <= 0 or fs <= 0 or data.shape[0] < 3:
             return data
@@ -2218,22 +2220,9 @@ class DDC233Gui:
                 'j,ijc->ic', res_weights, windows
             )
 
-        # ── Early samples (i < win-1): smaller trailing windows ──
-        ts = np.arange(N) / fs
-        for i in range(min(win - 1, N)):
-            w = i + 1
-            if w < n_aug + 1:
-                out[i] = data[i]
-                continue
-            t_w = ts[:w]
-            X_e = np.empty((w, n_aug))
-            X_e[:, 0] = 1.0
-            for idx_k, k in enumerate(valid_harmonics):
-                phase = 2.0 * np.pi * k * f0 * t_w
-                X_e[:, 1 + 2 * idx_k] = np.cos(phase)
-                X_e[:, 1 + 2 * idx_k + 1] = np.sin(phase)
-            beta, _, _, _ = np.linalg.lstsq(X_e, data[:w], rcond=None)
-            out[i] = data[i] - X_e[w - 1, 1:] @ beta[1:]  # subtract sin/cos only
+        # ── Early samples: pass through unfiltered (window not yet full) ──
+        if win - 1 > 0 and N > 0:
+            out[:min(win - 1, N)] = data[:min(win - 1, N)]
 
         if ensure_2d:
             out = out[:, 0]
