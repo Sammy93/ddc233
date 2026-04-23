@@ -2172,37 +2172,40 @@ class DDC233Gui:
             return data
 
         N = data.shape[0]
-        half = win // 2
         ensure_2d = data.ndim == 1
         if ensure_2d:
             data = data[:, np.newaxis]
 
         out = np.empty_like(data, dtype=float)
 
-        # ── Build design matrix for a full-size window (win samples) ──
+        # ── Build augmented design matrix: [DC, cos, sin, ...] ──
+        # Including a constant column prevents DC leakage into sinusoids.
+        # We fit the full model but only subtract the sinusoidal part.
+        # Trailing (causal) window: sample i uses data[i-win+1 : i+1].
+        n_aug = 1 + 2 * K  # 1 DC column + 2K sin/cos columns
         t_full = np.arange(win) / fs
-        X_full = np.empty((win, 2 * K))
+        X_aug = np.empty((win, n_aug))
+        X_aug[:, 0] = 1.0  # DC column
         for idx, k in enumerate(valid_harmonics):
             phase = 2.0 * np.pi * k * f0 * t_full
-            X_full[:, 2 * idx] = np.cos(phase)
-            X_full[:, 2 * idx + 1] = np.sin(phase)
+            X_aug[:, 1 + 2 * idx] = np.cos(phase)
+            X_aug[:, 1 + 2 * idx + 1] = np.sin(phase)
 
-        # Projection matrix P = X (X^T X)^{-1} X^T   (win × win)
-        # The residual for a window is  (I - P) @ data_window
-        # We only need row `half` of (I - P) for each center sample.
-        XtX_inv = np.linalg.pinv(X_full.T @ X_full)
-        # hat_row = X_full[half] @ XtX_inv @ X_full.T   → (win,)
-        hat_row = X_full[half] @ XtX_inv @ X_full.T
-        # residual weights: e_half - hat_row  (identity row minus hat row)
-        res_weights = -hat_row.copy()
-        res_weights[half] += 1.0  # (win,) weights to get residual at center
+        # Compute weights that subtract only the sinusoidal projection.
+        # beta_aug = (X_aug^T X_aug)^{-1} X_aug^T y   → full coefficients
+        # interference = X_sin[last] @ beta_aug[1:]   → sin/cos part only
+        # out = y[last] - interference
+        XtX_inv = np.linalg.pinv(X_aug.T @ X_aug)
+        # hat_row_sin: projects the window data onto the sinusoidal
+        # subspace (DC excluded) evaluated at the last sample.
+        X_sin_last = X_aug[win - 1, 1:]  # sin/cos values at last sample
+        hat_row_sin = X_sin_last @ XtX_inv[1:, :] @ X_aug.T  # (win,)
+        res_weights = -hat_row_sin.copy()
+        res_weights[win - 1] += 1.0  # e_last - hat_row_sin
 
         # ── Interior samples: batched dot product ──
-        # For sample i in [half, N-half), the window is data[i-half : i-half+win]
-        # and the filtered value is res_weights @ data[i-half : i-half+win]
         n_interior = N - win + 1
         if n_interior > 0:
-            # Build a (n_interior, win, C) view using stride tricks
             C = data.shape[1]
             from numpy.lib.stride_tricks import as_strided
             item = data.strides[0]
@@ -2211,29 +2214,26 @@ class DDC233Gui:
                 data, shape=(n_interior, win, C),
                 strides=(item, item, col_stride),
             )
-            # (n_interior, win, C) contracted with (win,) → (n_interior, C)
-            out[half:half + n_interior] = np.einsum(
+            out[win - 1:] = np.einsum(
                 'j,ijc->ic', res_weights, windows
             )
 
-        # ── Edge samples: small per-sample LS fits ──
+        # ── Early samples (i < win-1): smaller trailing windows ──
         ts = np.arange(N) / fs
-        for i in list(range(min(half, N))) + \
-                 list(range(max(half + n_interior, 0), N)):
-            lo = max(0, i - half)
-            hi = min(N, i + half + 1)
-            t_w = ts[lo:hi] - ts[lo]
-            w = hi - lo
-            if w < 2 * K + 1:
+        for i in range(min(win - 1, N)):
+            w = i + 1
+            if w < n_aug + 1:
                 out[i] = data[i]
                 continue
-            X_e = np.empty((w, 2 * K))
+            t_w = ts[:w]
+            X_e = np.empty((w, n_aug))
+            X_e[:, 0] = 1.0
             for idx_k, k in enumerate(valid_harmonics):
                 phase = 2.0 * np.pi * k * f0 * t_w
-                X_e[:, 2 * idx_k] = np.cos(phase)
-                X_e[:, 2 * idx_k + 1] = np.sin(phase)
-            beta, _, _, _ = np.linalg.lstsq(X_e, data[lo:hi], rcond=None)
-            out[i] = data[i] - X_e[i - lo] @ beta
+                X_e[:, 1 + 2 * idx_k] = np.cos(phase)
+                X_e[:, 1 + 2 * idx_k + 1] = np.sin(phase)
+            beta, _, _, _ = np.linalg.lstsq(X_e, data[:w], rcond=None)
+            out[i] = data[i] - X_e[w - 1, 1:] @ beta[1:]  # subtract sin/cos only
 
         if ensure_2d:
             out = out[:, 0]
