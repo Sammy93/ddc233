@@ -2890,8 +2890,20 @@ class DDC233Gui:
         idx = self.dbg_history_idx % HISTORY_LEN
         trace_idx = self.matrix_trace_idx
 
-        # Reorder traces into pre-allocated buffer (avoids np.concatenate)
-        if self.matrix_trace_mode == "row":
+        def reorder_dbg(src):
+            if self.dbg_history_filled:
+                return np.concatenate([src[idx:], src[:idx]], axis=0)[:length]
+            return src[:length]
+
+        if self.matrix_trace_mode == "avg":
+            history_ordered = reorder_dbg(self.dbg_history)
+            if self.dbg_calibration is not None:
+                history_ordered = history_ordered - self.dbg_calibration
+            mean_trace = ((history_ordered - offset) * scale).mean(axis=(1, 2))
+            traces = mean_trace.reshape(-1, 1)
+            trace_labels = ["Mean (all pixels)"]
+            title_detail = "Mean of all pixels"
+        elif self.matrix_trace_mode == "row":
             # "Row traces": each trace is a row; index selects column
             if trace_idx >= DBG_MATRIX_COLS:
                 trace_idx = 0
@@ -3040,7 +3052,20 @@ class DDC233Gui:
         idx = self.dbg12_history_idx % HISTORY_LEN
         trace_idx = self.matrix_trace_idx
 
-        if self.matrix_trace_mode == "row":
+        def reorder_dbg12(src):
+            if self.dbg12_history_filled:
+                return np.concatenate([src[idx:], src[:idx]], axis=0)[:length]
+            return src[:length]
+
+        if self.matrix_trace_mode == "avg":
+            history_ordered = reorder_dbg12(self.dbg12_history)
+            if self.dbg12_calibration is not None:
+                history_ordered = history_ordered - self.dbg12_calibration
+            mean_trace = ((history_ordered - offset) * scale).mean(axis=(1, 2))
+            traces = mean_trace.reshape(-1, 1)
+            trace_labels = ["Mean (all pixels)"]
+            title_detail = "Mean of all pixels"
+        elif self.matrix_trace_mode == "row":
             # "Row traces": each trace is a row; index selects column
             if trace_idx >= DBG12_MATRIX_COLS:
                 trace_idx = 0
