@@ -38,7 +38,7 @@ DEFAULT_DELAY_MS = 0
 # DDC232 coding:
 #   Code 0       = zero input (confirmed by test mode reading ~4000)
 #   Code 1048575 = positive full scale (0xFFFFF, 20-bit max)
-ZERO_CODE = 0
+ZERO_CODE = 4000
 MAX_CODE  = 1048575        # 0xFFFFF — positive full scale code
 FS_RANGE_CODES = MAX_CODE  # full code range from zero to full scale
 
@@ -664,53 +664,64 @@ class DDC233Gui:
         ttk.Label(row2, textvariable=self.notch_info_var,
                   foreground="gray").pack(side=tk.LEFT, padx=(0, 5))
 
+        # --- Row 3: Scale, calibration, logging, clear ---
+        row3 = ttk.Frame(self.root)
+        row3.pack(side=tk.TOP, fill=tk.X, padx=5, pady=(1, 3))
+
         # Manual color scale
-        ttk.Separator(row2, orient=tk.VERTICAL).pack(
-            side=tk.LEFT, fill=tk.Y, padx=5
-        )
         self.manual_clim_var = tk.BooleanVar(value=False)
-        ttk.Checkbutton(row2, text="Scale:", variable=self.manual_clim_var).pack(
+        ttk.Checkbutton(row3, text="Scale:", variable=self.manual_clim_var).pack(
             side=tk.LEFT
         )
         self.clim_min_var = tk.StringVar(value="0")
-        ttk.Entry(row2, textvariable=self.clim_min_var, width=7).pack(
+        ttk.Entry(row3, textvariable=self.clim_min_var, width=7).pack(
             side=tk.LEFT, padx=1
         )
-        ttk.Label(row2, text="-").pack(side=tk.LEFT)
+        ttk.Label(row3, text="-").pack(side=tk.LEFT)
         self.clim_max_var = tk.StringVar(value="1000")
-        ttk.Entry(row2, textvariable=self.clim_max_var, width=7).pack(
+        ttk.Entry(row3, textvariable=self.clim_max_var, width=7).pack(
             side=tk.LEFT, padx=1
         )
 
-        ttk.Separator(row2, orient=tk.VERTICAL).pack(
+        ttk.Separator(row3, orient=tk.VERTICAL).pack(
             side=tk.LEFT, fill=tk.Y, padx=5
         )
 
         # Calibration
         self.cal_btn = ttk.Button(
-            row2, text="Calibrate Zero", command=self._calibrate,
+            row3, text="Calibrate Zero", command=self._calibrate,
             state=tk.DISABLED
         )
         self.cal_btn.pack(side=tk.LEFT, padx=2)
         self.cal_clear_btn = ttk.Button(
-            row2, text="Clear Cal", command=self._clear_calibration,
+            row3, text="Clear Cal", command=self._clear_calibration,
             state=tk.DISABLED
         )
         self.cal_clear_btn.pack(side=tk.LEFT, padx=2)
 
-        ttk.Separator(row2, orient=tk.VERTICAL).pack(
+        ttk.Separator(row3, orient=tk.VERTICAL).pack(
             side=tk.LEFT, fill=tk.Y, padx=5
         )
 
         # Logging
         self.log_btn = ttk.Button(
-            row2, text="Start Log", command=self._toggle_log,
+            row3, text="Start Log", command=self._toggle_log,
             state=tk.DISABLED
         )
         self.log_btn.pack(side=tk.LEFT, padx=2)
         self.log_status_var = tk.StringVar(value="")
-        ttk.Label(row2, textvariable=self.log_status_var,
+        ttk.Label(row3, textvariable=self.log_status_var,
                   foreground="#27ae60").pack(side=tk.LEFT, padx=2)
+
+        ttk.Separator(row3, orient=tk.VERTICAL).pack(
+            side=tk.LEFT, fill=tk.Y, padx=5
+        )
+
+        # Clear time series
+        self.clear_plot_btn = ttk.Button(
+            row3, text="Clear Plot", command=self._clear_time_series
+        )
+        self.clear_plot_btn.pack(side=tk.LEFT, padx=2)
 
     def _build_plots(self):
         self.fig = Figure(tight_layout=True)
@@ -1237,6 +1248,25 @@ class DDC233Gui:
             self.single_calibration = None
         self._clear_resistance_texts()
         self.status_var.set("Calibration cleared")
+
+    def _clear_time_series(self):
+        """Reset all history buffers and clear the line plot."""
+        self.history_idx = 0
+        self.history_filled = False
+        self.matrix_history_idx = 0
+        self.matrix_history_filled = False
+        self.full_history_idx = 0
+        self.full_history_filled = False
+        self.dbg_history_idx = 0
+        self.dbg_history_filled = False
+        self.dbg12_history_idx = 0
+        self.dbg12_history_filled = False
+        self.lines = {}
+        self.ax_line.clear()
+        self.ax_line.set_title("Time Series")
+        self.ax_line.set_xlabel("Sample")
+        self.ax_line.grid(True, alpha=0.3)
+        self.canvas.draw_idle()
 
     def _hide_resistance_texts(self):
         for t in self._resistance_texts:
