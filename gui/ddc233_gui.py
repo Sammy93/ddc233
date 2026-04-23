@@ -2200,17 +2200,17 @@ class DDC233Gui:
 
         nyq = fs / 2
 
-        # ── Select harmonics that don't alias near DC or Nyquist ──
+        # ── Select harmonics that don't alias near DC or duplicate ──
         valid_harmonics = []
         used_aliases = []
         for k in range(1, K_max + 1):
             f_alias = (f0 * k) % fs
             if f_alias > nyq:
                 f_alias = fs - f_alias
-            # Skip near-DC or near-Nyquist (same guard as old biquad)
-            if f_alias < 2.0 or f_alias > nyq - 1.0:
+            # Skip near-DC (would absorb the DC level)
+            if f_alias < 2.0:
                 continue
-            # Skip if too close to an already-included alias
+            # Skip if too close to an already-included alias (ill-conditioned)
             if any(abs(f_alias - fa) < 1.0 for fa in used_aliases):
                 continue
             valid_harmonics.append(k)
