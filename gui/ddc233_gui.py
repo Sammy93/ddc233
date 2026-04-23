@@ -1077,6 +1077,24 @@ class DDC233Gui:
         else:
             return 1.0, "Value (bits)"
 
+    def _apply_line_ylim(self, ymin, ymax, scale):
+        """Set line plot Y limits — uses manual scale if enabled, else auto."""
+        if self.manual_clim_var.get():
+            try:
+                vmin = float(self.clim_min_var.get())
+                vmax = float(self.clim_max_var.get())
+                if vmin < vmax:
+                    self.ax_line.set_ylim(vmin, vmax)
+                    return
+            except ValueError:
+                pass
+        span = abs(ymax - ymin)
+        if span == 0:
+            margin = max(abs(ymin) * 0.01, 1e-6) if scale != 1.0 else 1
+        else:
+            margin = span * 0.05
+        self.ax_line.set_ylim(ymin - margin, ymax + margin)
+
     def _apply_clim(self, data):
         """Set heatmap color limits — manual if checkbox is on, else auto from data."""
         if self.manual_clim_var.get():
@@ -2044,6 +2062,35 @@ class DDC233Gui:
 
         self.root.after(100, self._poll_data)  # drain queue every 100 ms
 
+    def _rms_noise_pA(self, traces):
+        """Compute RMS noise of the (filtered) avg trace in pA."""
+        if traces.shape[0] < 2:
+            return 0.0
+        col = traces[:, 0] if traces.ndim == 2 else traces
+        try:
+            int_us = float(self.inttime_var.get())
+        except ValueError:
+            int_us = 1000.0
+        try:
+            rng_idx = int(self.range_var.get())
+        except ValueError:
+            rng_idx = 1
+        range_pC = RANGE_PC[min(rng_idx, len(RANGE_PC) - 1)]
+        # traces are already in display units; convert back to codes
+        # if currently in nA: codes = nA / (range_pC/MAX_CODE * 1000/int_us)
+        # but simpler: compute RMS of trace, then convert that value to pA
+        units = self.units_var.get()
+        rms = float(np.std(col))
+        if units == "nA":
+            return rms * 1000.0  # nA → pA
+        elif units == "pC":
+            return rms / int_us * 1e6 * 1000.0  # pC → nA → pA
+        else:
+            # Bits → pA
+            pC_per_code = range_pC / MAX_CODE
+            nA = rms * pC_per_code * 1000.0 / int_us
+            return nA * 1000.0  # nA → pA
+
     def _get_sma_window(self):
         """Return the current SMA window size (1 = no filtering)."""
         try:
@@ -2313,12 +2360,7 @@ class DDC233Gui:
         if visible_chs:
             visible = data[:, visible_chs]
             ymin, ymax = visible.min(), visible.max()
-            span = abs(ymax - ymin)
-            if span == 0:
-                margin = max(abs(ymin) * 0.01, 1e-6) if scale != 1.0 else 1
-            else:
-                margin = span * 0.05
-            self.ax_line.set_ylim(ymin - margin, ymax + margin)
+            self._apply_line_ylim(ymin, ymax, scale)
 
         # Only rebuild legend when channels change
         if legend_dirty or not hasattr(self, '_legend_channels') or self._legend_channels != self.selected_channels:
@@ -2409,12 +2451,7 @@ class DDC233Gui:
 
         self.ax_line.set_xlim(0, max(length - 1, 1))
         ymin, ymax = data_man.min(), data_man.max()
-        span = abs(ymax - ymin)
-        if span == 0:
-            margin = max(abs(ymin) * 0.01, 1e-6) if scale != 1.0 else 1
-        else:
-            margin = span * 0.05
-        self.ax_line.set_ylim(ymin - margin, ymax + margin)
+        self._apply_line_ylim(ymin, ymax, scale)
 
         self.ax_line.set_title("Time Series — Channels 1-12")
         if legend_dirty:
@@ -2509,12 +2546,7 @@ class DDC233Gui:
 
         self.ax_line.set_xlim(0, max(length - 1, 1))
         ymin, ymax = data_odd.min(), data_odd.max()
-        span = abs(ymax - ymin)
-        if span == 0:
-            margin = max(abs(ymin) * 0.01, 1e-6) if scale != 1.0 else 1
-        else:
-            margin = span * 0.05
-        self.ax_line.set_ylim(ymin - margin, ymax + margin)
+        self._apply_line_ylim(ymin, ymax, scale)
 
         if legend_dirty or not hasattr(self, '_legend_odd'):
             old_legend = self.ax_line.get_legend()
@@ -2690,14 +2722,13 @@ class DDC233Gui:
 
         self.ax_line.set_xlim(0, max(length - 1, 1))
         ymin, ymax = traces.min(), traces.max()
-        span = abs(ymax - ymin)
-        if span == 0:
-            margin = max(abs(ymin) * 0.01, 1e-6) if scale != 1.0 else 1
-        else:
-            margin = span * 0.05
-        self.ax_line.set_ylim(ymin - margin, ymax + margin)
+        self._apply_line_ylim(ymin, ymax, scale)
 
-        self.ax_line.set_title(f"Time Series — {title_detail}")
+        if self.matrix_trace_mode == "avg":
+            rms_pA = self._rms_noise_pA(traces)
+            self.ax_line.set_title(f"Time Series — {title_detail}  (RMS noise: {rms_pA:.1f} pA)")
+        else:
+            self.ax_line.set_title(f"Time Series — {title_detail}")
 
         if legend_dirty or not hasattr(self, '_legend_matrix_key') or self._legend_matrix_key != (self.matrix_trace_mode, trace_idx, show_mean):
             old_legend = self.ax_line.get_legend()
@@ -2822,14 +2853,13 @@ class DDC233Gui:
 
         self.ax_line.set_xlim(0, max(length - 1, 1))
         ymin, ymax = traces.min(), traces.max()
-        span = abs(ymax - ymin)
-        if span == 0:
-            margin = max(abs(ymin) * 0.01, 1e-6) if scale != 1.0 else 1
-        else:
-            margin = span * 0.05
-        self.ax_line.set_ylim(ymin - margin, ymax + margin)
+        self._apply_line_ylim(ymin, ymax, scale)
 
-        self.ax_line.set_title(f"Time Series — {title_detail}")
+        if self.matrix_trace_mode == "avg":
+            rms_pA = self._rms_noise_pA(traces)
+            self.ax_line.set_title(f"Time Series — {title_detail}  (RMS noise: {rms_pA:.1f} pA)")
+        else:
+            self.ax_line.set_title(f"Time Series — {title_detail}")
         if legend_dirty:
             old_legend = self.ax_line.get_legend()
             if old_legend:
@@ -2984,14 +3014,13 @@ class DDC233Gui:
 
         self.ax_line.set_xlim(0, max(length - 1, 1))
         ymin, ymax = traces.min(), traces.max()
-        span = abs(ymax - ymin)
-        if span == 0:
-            margin = max(abs(ymin) * 0.01, 1e-6) if scale != 1.0 else 1
-        else:
-            margin = span * 0.05
-        self.ax_line.set_ylim(ymin - margin, ymax + margin)
+        self._apply_line_ylim(ymin, ymax, scale)
 
-        self.ax_line.set_title(f"Time Series — {title_detail}")
+        if self.matrix_trace_mode == "avg":
+            rms_pA = self._rms_noise_pA(traces)
+            self.ax_line.set_title(f"Time Series — {title_detail}  (RMS noise: {rms_pA:.1f} pA)")
+        else:
+            self.ax_line.set_title(f"Time Series — {title_detail}")
 
         if legend_dirty or not hasattr(self, '_legend_dbg_key') or self._legend_dbg_key != (self.matrix_trace_mode, trace_idx):
             old_legend = self.ax_line.get_legend()
@@ -3144,14 +3173,13 @@ class DDC233Gui:
 
         self.ax_line.set_xlim(0, max(length - 1, 1))
         ymin, ymax = traces.min(), traces.max()
-        span = abs(ymax - ymin)
-        if span == 0:
-            margin = max(abs(ymin) * 0.01, 1e-6) if scale != 1.0 else 1
-        else:
-            margin = span * 0.05
-        self.ax_line.set_ylim(ymin - margin, ymax + margin)
+        self._apply_line_ylim(ymin, ymax, scale)
 
-        self.ax_line.set_title(f"Time Series — {title_detail}")
+        if self.matrix_trace_mode == "avg":
+            rms_pA = self._rms_noise_pA(traces)
+            self.ax_line.set_title(f"Time Series — {title_detail}  (RMS noise: {rms_pA:.1f} pA)")
+        else:
+            self.ax_line.set_title(f"Time Series — {title_detail}")
 
         if legend_dirty or not hasattr(self, '_legend_dbg12_key') or self._legend_dbg12_key != (self.matrix_trace_mode, trace_idx):
             old_legend = self.ax_line.get_legend()
