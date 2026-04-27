@@ -496,6 +496,10 @@ class DDC233Gui:
         self.matrix_trace_mode = "row"  # "row" or "column"
         self.matrix_trace_idx = 0       # which row or column to show
 
+        # 1x12 (manual/odd) line plot mode: "all" shows each channel, "avg"
+        # collapses all 12 channels into a single mean trace.
+        self.single_trace_mode = "all"
+
         # FPS tracking
         self._sample_count = 0
         self._fps_time = time.time()
@@ -800,6 +804,19 @@ class DDC233Gui:
         self.show_mean_var = tk.BooleanVar(value=False)
         ttk.Checkbutton(self.matrix_trace_frame, text="+ Mean",
                         variable=self.show_mean_var).pack(side=tk.LEFT, padx=(10, 2))
+
+        # 1x12 (manual/odd) trace selector (hidden initially)
+        self.single_trace_frame = ttk.Frame(self.ch_frame)
+        ttk.Label(self.single_trace_frame, text="Show:").pack(side=tk.LEFT, padx=2)
+        self.single_trace_mode_var = tk.StringVar(value="all")
+        ttk.Radiobutton(self.single_trace_frame, text="All 12",
+                        variable=self.single_trace_mode_var, value="all",
+                        command=self._on_single_trace_mode_change).pack(
+                            side=tk.LEFT, padx=2)
+        ttk.Radiobutton(self.single_trace_frame, text="Avg all",
+                        variable=self.single_trace_mode_var, value="avg",
+                        command=self._on_single_trace_mode_change).pack(
+                            side=tk.LEFT, padx=2)
 
     def _build_dac_controls(self):
         frame = ttk.LabelFrame(self.root, text="DAC Voltage Controls")
@@ -1518,6 +1535,7 @@ class DDC233Gui:
             # Show matrix trace selector, hide channel checkboxes
             self.ch_inner.pack_forget()
             self.ch_btn_frame.pack_forget()
+            self.single_trace_frame.pack_forget()
             self.matrix_trace_frame.pack(fill=tk.X, padx=3, pady=2)
             frame_label = {"matrix": "Matrix Traces (line plot)",
                            "full": "Full Matrix Traces (line plot)",
@@ -1540,6 +1558,7 @@ class DDC233Gui:
             self.matrix_trace_frame.pack_forget()
             self.ch_inner.pack_forget()
             self.ch_btn_frame.pack_forget()
+            self.single_trace_frame.pack(fill=tk.X, padx=3, pady=2)
             self.ch_frame.config(text="Channels 1-12 (all shown)")
         elif mode == "odd":
             self.heatmap_data_odd = np.zeros((1, NUM_ODD_CHANNELS))
@@ -1555,10 +1574,11 @@ class DDC233Gui:
             self.ax_heat.set_xticks(range(NUM_ODD_CHANNELS))
             self.ax_heat.set_xticklabels(ODD_PHYS_CHANNELS, fontsize=7)
 
-            # Hide both selectors — all 12 odd channels shown automatically
+            # Hide channel checkboxes; show 1x12 trace selector
             self.matrix_trace_frame.pack_forget()
             self.ch_inner.pack_forget()
             self.ch_btn_frame.pack_forget()
+            self.single_trace_frame.pack(fill=tk.X, padx=3, pady=2)
             self.ch_frame.config(text="Odd Channels 1-23 (all shown)")
         else:
             self.heatmap_data = np.zeros((1, NUM_CHANNELS))
@@ -1576,8 +1596,9 @@ class DDC233Gui:
                 list(range(1, NUM_CHANNELS + 1, 2)),
                 fontsize=7)
 
-            # Show channel checkboxes, hide matrix trace selector
+            # Show channel checkboxes, hide trace selectors
             self.matrix_trace_frame.pack_forget()
+            self.single_trace_frame.pack_forget()
             self.ch_inner.pack(fill=tk.X, padx=3, pady=2)
             self.ch_btn_frame.pack(fill=tk.X, padx=3, pady=2)
             self.ch_frame.config(text="Channels (line plot)")
@@ -1803,6 +1824,14 @@ class DDC233Gui:
         # Disable index combo when in avg mode
         self.trace_idx_combo.config(
             state="disabled" if self.matrix_trace_mode == "avg" else "readonly")
+        self.lines = {}
+        self.ax_line.clear()
+        self.ax_line.set_title("Time Series")
+        self.ax_line.set_xlabel("Sample")
+        self.ax_line.grid(True, alpha=0.3)
+
+    def _on_single_trace_mode_change(self):
+        self.single_trace_mode = self.single_trace_mode_var.get()
         self.lines = {}
         self.ax_line.clear()
         self.ax_line.set_title("Time Series")
@@ -2341,36 +2370,48 @@ class DDC233Gui:
         data_man = self._apply_sma(data_man, sma_w)
         length = data_man.shape[0]
 
+        if self.single_trace_mode == "avg":
+            traces = data_man.mean(axis=1, keepdims=True)
+            trace_labels = ["Mean (1-12)"]
+            n_traces = 1
+        else:
+            traces = data_man
+            trace_labels = [str(MANUAL_PHYS_CHANNELS[i])
+                            for i in range(NUM_MANUAL_CHANNELS)]
+            n_traces = NUM_MANUAL_CHANNELS
+
         MAX_PLOT_PTS = 1000
         if length > MAX_PLOT_PTS:
             step = length // MAX_PLOT_PTS
-            data_dec = data_man[::step]
+            data_dec = traces[::step]
             x = np.arange(0, length, step)
         else:
-            data_dec = data_man
+            data_dec = traces
             x = np.arange(length)
 
         for key in list(self.lines.keys()):
-            if key >= NUM_MANUAL_CHANNELS:
+            if key >= n_traces:
                 self.lines[key].remove()
                 del self.lines[key]
 
         cmap = matplotlib.colormaps["tab20"]
         legend_dirty = False
-        for i in range(NUM_MANUAL_CHANNELS):
+        for i in range(n_traces):
             y = data_dec[:, i]
             if i in self.lines:
                 self.lines[i].set_data(x, y)
             else:
-                color = cmap(i / NUM_MANUAL_CHANNELS)
-                label = str(MANUAL_PHYS_CHANNELS[i])
-                (line,) = self.ax_line.plot(x, y, color=color, linewidth=1,
-                                            label=label)
+                if self.single_trace_mode == "avg":
+                    color, lw = "black", 1.5
+                else:
+                    color, lw = cmap(i / NUM_MANUAL_CHANNELS), 1
+                (line,) = self.ax_line.plot(x, y, color=color, linewidth=lw,
+                                            label=trace_labels[i])
                 self.lines[i] = line
                 legend_dirty = True
 
         self.ax_line.set_xlim(0, max(length - 1, 1))
-        ymin, ymax = data_man.min(), data_man.max()
+        ymin, ymax = traces.min(), traces.max()
         span = abs(ymax - ymin)
         if span == 0:
             margin = max(abs(ymin) * 0.01, 1e-6) if scale != 1.0 else 1
@@ -2378,7 +2419,10 @@ class DDC233Gui:
             margin = span * 0.05
         self.ax_line.set_ylim(ymin - margin, ymax + margin)
 
-        self.ax_line.set_title("Time Series — Channels 1-12")
+        title = ("Time Series — Mean of Channels 1-12"
+                 if self.single_trace_mode == "avg"
+                 else "Time Series — Channels 1-12")
+        self.ax_line.set_title(title)
         if legend_dirty:
             old_legend = self.ax_line.get_legend()
             if old_legend:
@@ -2440,43 +2484,60 @@ class DDC233Gui:
         data_odd = self._apply_sma(data_odd, sma_w)
         length = data_odd.shape[0]
 
+        if self.single_trace_mode == "avg":
+            traces = data_odd.mean(axis=1, keepdims=True)
+            trace_labels = ["Mean (odd)"]
+            n_traces = 1
+        else:
+            traces = data_odd
+            trace_labels = [str(ODD_PHYS_CHANNELS[i])
+                            for i in range(NUM_ODD_CHANNELS)]
+            n_traces = NUM_ODD_CHANNELS
+
         MAX_PLOT_PTS = 1000
         if length > MAX_PLOT_PTS:
             step = length // MAX_PLOT_PTS
-            data_dec = data_odd[::step]
+            data_dec = traces[::step]
             x = np.arange(0, length, step)
         else:
-            data_dec = data_odd
+            data_dec = traces
             x = np.arange(length)
 
         # Remove stale lines
         for key in list(self.lines.keys()):
-            if key >= NUM_ODD_CHANNELS:
+            if key >= n_traces:
                 self.lines[key].remove()
                 del self.lines[key]
 
         cmap = matplotlib.colormaps["tab20"]
         legend_dirty = False
-        for i in range(NUM_ODD_CHANNELS):
+        for i in range(n_traces):
             y = data_dec[:, i]
             if i in self.lines:
                 self.lines[i].set_data(x, y)
             else:
-                color = cmap(i / NUM_ODD_CHANNELS)
-                label = str(ODD_PHYS_CHANNELS[i])
-                (line,) = self.ax_line.plot(x, y, color=color, linewidth=1,
-                                            label=label)
+                if self.single_trace_mode == "avg":
+                    color, lw = "black", 1.5
+                else:
+                    color, lw = cmap(i / NUM_ODD_CHANNELS), 1
+                (line,) = self.ax_line.plot(x, y, color=color, linewidth=lw,
+                                            label=trace_labels[i])
                 self.lines[i] = line
                 legend_dirty = True
 
         self.ax_line.set_xlim(0, max(length - 1, 1))
-        ymin, ymax = data_odd.min(), data_odd.max()
+        ymin, ymax = traces.min(), traces.max()
         span = abs(ymax - ymin)
         if span == 0:
             margin = max(abs(ymin) * 0.01, 1e-6) if scale != 1.0 else 1
         else:
             margin = span * 0.05
         self.ax_line.set_ylim(ymin - margin, ymax + margin)
+
+        title = ("Time Series — Mean of Odd Channels (1-23)"
+                 if self.single_trace_mode == "avg"
+                 else "Time Series — Odd Channels (1-23)")
+        self.ax_line.set_title(title)
 
         if legend_dirty or not hasattr(self, '_legend_odd'):
             old_legend = self.ax_line.get_legend()
